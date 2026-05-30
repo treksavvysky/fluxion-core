@@ -114,6 +114,83 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
                   },
                   required: ['issueId', 'cycleId']
                 }
+              },
+              {
+                name: 'read_products',
+                description: 'Read the list of products from the Fluxion Core database.',
+                inputSchema: {
+                  type: 'object',
+                  properties: {}
+                }
+              },
+              {
+                name: 'create_product',
+                description: 'Create a new product inside the Fluxion Core database.',
+                inputSchema: {
+                  type: 'object',
+                  properties: {
+                    name: { type: 'string', description: 'The name of the product' },
+                    description: { type: 'string', description: 'Detailed description of the product' }
+                  },
+                  required: ['name']
+                }
+              },
+              {
+                name: 'read_projects',
+                description: 'Read the list of active or upcoming projects (temporal milestones).',
+                inputSchema: {
+                  type: 'object',
+                  properties: {}
+                }
+              },
+              {
+                name: 'create_project',
+                description: 'Create a new project (temporal milestone) inside the Fluxion Core database.',
+                inputSchema: {
+                  type: 'object',
+                  properties: {
+                    name: { type: 'string', description: 'The name of the project' },
+                    description: { type: 'string', description: 'Detailed description of the project' },
+                    productId: { type: 'string', description: 'Optional UUID of the product this project belongs to' },
+                    status: { type: 'string', description: 'Initial status (Planned, Active, Completed, Cancelled)' }
+                  },
+                  required: ['name']
+                }
+              },
+              {
+                name: 'read_repositories',
+                description: 'Read the list of codebase repositories.',
+                inputSchema: {
+                  type: 'object',
+                  properties: {}
+                }
+              },
+              {
+                name: 'create_repository',
+                description: 'Create a new repository record inside the Fluxion Core database.',
+                inputSchema: {
+                  type: 'object',
+                  properties: {
+                    name: { type: 'string', description: 'The name of the repository' },
+                    url: { type: 'string', description: 'The URL of the repository (e.g. GitHub URL)' },
+                    productId: { type: 'string', description: 'Optional UUID of the product this repository belongs to' }
+                  },
+                  required: ['name']
+                }
+              },
+              {
+                name: 'assign_issue_details',
+                description: 'Assign an issue to a product, project, and/or repository.',
+                inputSchema: {
+                  type: 'object',
+                  properties: {
+                    issueId: { type: 'string', description: 'The UUID of the issue' },
+                    productId: { type: 'string', description: 'The UUID of the product, or "none" / null to unassign' },
+                    projectId: { type: 'string', description: 'The UUID of the project, or "none" / null to unassign' },
+                    repoId: { type: 'string', description: 'The UUID of the repository, or "none" / null to unassign' }
+                  },
+                  required: ['issueId']
+                }
               }
             ]
           }
@@ -213,6 +290,139 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             id,
             result: {
               content: [{ type: 'text', text: `Successfully updated issue ${updated.identifier} cycle to ${targetCycleId || 'None'}` }]
+            }
+          });
+        }
+
+        if (toolName === 'read_products') {
+          const products = await prisma.product.findMany({
+            orderBy: { createdAt: 'desc' },
+            include: {
+              _count: { select: { projects: true, repos: true, issues: true } }
+            }
+          });
+          return res.status(200).json({
+            jsonrpc: '2.0',
+            id,
+            result: {
+              content: [{ type: 'text', text: JSON.stringify(products, null, 2) }]
+            }
+          });
+        }
+
+        if (toolName === 'create_product') {
+          if (!args?.name) throw new Error('Missing name');
+          const p = await prisma.product.create({
+            data: {
+              name: args.name,
+              description: args.description || null
+            }
+          });
+          try { revalidatePath('/'); } catch (e) {}
+          return res.status(200).json({
+            jsonrpc: '2.0',
+            id,
+            result: {
+              content: [{ type: 'text', text: `Successfully created product ${p.name}` }]
+            }
+          });
+        }
+
+        if (toolName === 'read_projects') {
+          const projects = await prisma.project.findMany({
+            orderBy: { createdAt: 'desc' },
+            include: {
+              product: { select: { name: true } },
+              _count: { select: { issues: true } }
+            }
+          });
+          return res.status(200).json({
+            jsonrpc: '2.0',
+            id,
+            result: {
+              content: [{ type: 'text', text: JSON.stringify(projects, null, 2) }]
+            }
+          });
+        }
+
+        if (toolName === 'create_project') {
+          if (!args?.name) throw new Error('Missing name');
+          const proj = await prisma.project.create({
+            data: {
+              name: args.name,
+              description: args.description || null,
+              status: args.status || 'Planned',
+              productId: args.productId || null
+            }
+          });
+          try { revalidatePath('/'); } catch (e) {}
+          return res.status(200).json({
+            jsonrpc: '2.0',
+            id,
+            result: {
+              content: [{ type: 'text', text: `Successfully created project ${proj.name}` }]
+            }
+          });
+        }
+
+        if (toolName === 'read_repositories') {
+          const repos = await prisma.repository.findMany({
+            orderBy: { createdAt: 'desc' },
+            include: {
+              product: { select: { name: true } },
+              _count: { select: { issues: true } }
+            }
+          });
+          return res.status(200).json({
+            jsonrpc: '2.0',
+            id,
+            result: {
+              content: [{ type: 'text', text: JSON.stringify(repos, null, 2) }]
+            }
+          });
+        }
+
+        if (toolName === 'create_repository') {
+          if (!args?.name) throw new Error('Missing name');
+          const r = await prisma.repository.create({
+            data: {
+              name: args.name,
+              url: args.url || null,
+              productId: args.productId || null
+            }
+          });
+          try { revalidatePath('/'); } catch (e) {}
+          return res.status(200).json({
+            jsonrpc: '2.0',
+            id,
+            result: {
+              content: [{ type: 'text', text: `Successfully created repository ${r.name}` }]
+            }
+          });
+        }
+
+        if (toolName === 'assign_issue_details') {
+          if (!args?.issueId) throw new Error('Missing issueId');
+          const updateData: any = {};
+          if (args.productId !== undefined) {
+            updateData.productId = args.productId === 'none' || args.productId === '' ? null : args.productId;
+          }
+          if (args.projectId !== undefined) {
+            updateData.projectId = args.projectId === 'none' || args.projectId === '' ? null : args.projectId;
+          }
+          if (args.repoId !== undefined) {
+            updateData.repoId = args.repoId === 'none' || args.repoId === '' ? null : args.repoId;
+          }
+          const updated = await prisma.issue.update({
+            where: { id: args.issueId },
+            data: updateData
+          });
+          try { revalidatePath('/'); } catch (e) {}
+          return res.status(200).json({
+            jsonrpc: '2.0',
+            id,
+            result: {
+              content: [{ type: 'text', text: `Successfully updated issue ${updated.identifier} mappings.` }]
             }
           });
         }
