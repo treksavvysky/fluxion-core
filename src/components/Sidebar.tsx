@@ -1,10 +1,20 @@
 'use client';
 
 import styles from './sidebar.module.css';
-import { Layers, CheckCircle2, Map, Users, Settings, Plus, Search } from 'lucide-react';
+import { Layers, CheckCircle2, Map, Users, Settings, Plus, Search, Package, Rocket, GitBranch } from 'lucide-react';
 import Link from 'next/link';
+import { usePathname } from 'next/navigation';
 
 export default function Sidebar() {
+  const pathname = usePathname();
+
+  const isLinkActive = (href: string) => {
+    if (href === '/') {
+      return pathname === '/';
+    }
+    return pathname?.startsWith(href);
+  };
+
   return (
     <aside className={styles.sidebar}>
       <div className={styles.header}>
@@ -29,11 +39,11 @@ export default function Sidebar() {
 
       <div className={styles.navGroup}>
         <div className={styles.navGroupTitle}>Your Work</div>
-        <Link href="/" className={`${styles.navItem} ${styles.active}`} style={{ textDecoration: 'none' }}>
+        <Link href="/" className={`${styles.navItem} ${isLinkActive('/') ? styles.active : ''}`} style={{ textDecoration: 'none' }}>
           <CheckCircle2 size={16} className={styles.navItemIcon} />
           Issues
         </Link>
-        <Link href="/cycles" className={styles.navItem} style={{ textDecoration: 'none' }}>
+        <Link href="/cycles" className={`${styles.navItem} ${isLinkActive('/cycles') ? styles.active : ''}`} style={{ textDecoration: 'none' }}>
           <Layers size={16} className={styles.navItemIcon} />
           Active Cycle
         </Link>
@@ -41,7 +51,7 @@ export default function Sidebar() {
 
       <div className={styles.navGroup}>
         <div className={styles.navGroupTitle}>Planning</div>
-        <Link href="/roadmaps" className={styles.navItem} style={{ textDecoration: 'none' }}>
+        <Link href="/roadmaps" className={`${styles.navItem} ${isLinkActive('/roadmaps') ? styles.active : ''}`} style={{ textDecoration: 'none' }}>
           <Map size={16} className={styles.navItemIcon} />
           Roadmaps
         </Link>
@@ -49,6 +59,22 @@ export default function Sidebar() {
           <Users size={16} className={styles.navItemIcon} />
           Teams
         </div>
+      </div>
+
+      <div className={styles.navGroup}>
+        <div className={styles.navGroupTitle}>Scope</div>
+        <Link href="/products" className={`${styles.navItem} ${isLinkActive('/products') ? styles.active : ''}`} style={{ textDecoration: 'none' }}>
+          <Package size={16} className={styles.navItemIcon} />
+          Products
+        </Link>
+        <Link href="/projects" className={`${styles.navItem} ${isLinkActive('/projects') ? styles.active : ''}`} style={{ textDecoration: 'none' }}>
+          <Rocket size={16} className={styles.navItemIcon} />
+          Projects
+        </Link>
+        <Link href="/repositories" className={`${styles.navItem} ${isLinkActive('/repositories') ? styles.active : ''}`} style={{ textDecoration: 'none' }}>
+          <GitBranch size={16} className={styles.navItemIcon} />
+          Repositories
+        </Link>
       </div>
 
       <div style={{ marginTop: 'auto' }}>
@@ -60,3 +86,4 @@ export default function Sidebar() {
     </aside>
   );
 }
+

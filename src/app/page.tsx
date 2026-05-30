@@ -63,7 +63,14 @@ export default async function Home({ searchParams }: { searchParams: Promise<{ n
                       {issue.status}
                     </span>
                   </div>
-                  <div className={`${styles.colTitle} ${styles.issueTitle}`}>{issue.title}</div>
+                  <div className={`${styles.colTitle} ${styles.issueTitle}`}>
+                    <div>{issue.title}</div>
+                    <div className={styles.issueTags}>
+                      {issue.product && <span className={`${styles.tag} ${styles.productTag}`}>{issue.product.name}</span>}
+                      {issue.project && <span className={`${styles.tag} ${styles.projectTag}`}>{issue.project.name}</span>}
+                      {issue.repo && <span className={`${styles.tag} ${styles.repoTag}`}>{issue.repo.name}</span>}
+                    </div>
+                  </div>
                   <div className={`${styles.colPriority} ${styles.priorityIcon}`}>{issue.priority}</div>
                 </div>
               </Link>

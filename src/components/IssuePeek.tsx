@@ -1,14 +1,24 @@
 import { getIssueById } from '@/actions/issue';
 import { getCycles } from '@/actions/cycles';
+import { getProducts } from '@/actions/products';
+import { getProjects } from '@/actions/projects';
+import { getRepositories } from '@/actions/repositories';
 import { X } from 'lucide-react';
 import Link from 'next/link';
 import styles from './issue-peek.module.css';
 import StatusUpdater from './StatusUpdater';
 import CycleAssigner from './CycleAssigner';
+import ProductAssigner from './ProductAssigner';
+import ProjectAssigner from './ProjectAssigner';
+import RepositoryAssigner from './RepositoryAssigner';
 
 export default async function IssuePeek({ issueId }: { issueId: string }) {
   const issue = await getIssueById(issueId);
   const cycles = await getCycles();
+  const products = await getProducts();
+  const projects = await getProjects();
+  const repos = await getRepositories();
+
   if (!issue) return null;
 
   return (
@@ -33,6 +43,15 @@ export default async function IssuePeek({ issueId }: { issueId: string }) {
           
           <span className={styles.metaLabel}>Cycle</span>
           <CycleAssigner issueId={issue.id} currentCycleId={issue.cycleId} cycles={cycles} />
+
+          <span className={styles.metaLabel}>Product</span>
+          <ProductAssigner issueId={issue.id} currentProductId={issue.productId} products={products} />
+
+          <span className={styles.metaLabel}>Project</span>
+          <ProjectAssigner issueId={issue.id} currentProjectId={issue.projectId} projects={projects} />
+
+          <span className={styles.metaLabel}>Repository</span>
+          <RepositoryAssigner issueId={issue.id} currentRepoId={issue.repoId} repositories={repos} />
         </div>
 
         <div style={{ marginTop: '32px' }}>
@@ -45,3 +64,4 @@ export default async function IssuePeek({ issueId }: { issueId: string }) {
     </div>
   );
 }
+

@@ -7,12 +7,22 @@ import { redirect } from 'next/navigation';
 export async function getIssues() {
   return prisma.issue.findMany({
     orderBy: { createdAt: 'desc' },
+    include: {
+      product: { select: { name: true } },
+      project: { select: { name: true } },
+      repo: { select: { name: true } }
+    }
   });
 }
 
 export async function getIssueById(id: string) {
   return prisma.issue.findUnique({
     where: { id },
+    include: {
+      product: { select: { name: true } },
+      project: { select: { name: true } },
+      repo: { select: { name: true } }
+    }
   });
 }
 
@@ -48,3 +58,28 @@ export async function updateIssueStatus(id: string, newStatus: string) {
   
   revalidatePath('/');
 }
+
+export async function assignIssueDetails(
+  issueId: string,
+  data: { productId?: string | null; projectId?: string | null; repoId?: string | null }
+) {
+  const updateData: any = {};
+  if (data.productId !== undefined) {
+    updateData.productId = data.productId === 'none' ? null : data.productId;
+  }
+  if (data.projectId !== undefined) {
+    updateData.projectId = data.projectId === 'none' ? null : data.projectId;
+  }
+  if (data.repoId !== undefined) {
+    updateData.repoId = data.repoId === 'none' ? null : data.repoId;
+  }
+
+  const updated = await prisma.issue.update({
+    where: { id: issueId },
+    data: updateData,
+  });
+  
+  revalidatePath('/');
+  return updated;
+}
+
