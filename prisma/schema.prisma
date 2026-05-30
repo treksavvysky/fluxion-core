@@ -79,6 +79,7 @@ model Repository {
   productId   String?
   product     Product? @relation(fields: [productId], references: [id])
   issues      Issue[]
+  builds      Build[]
 }
 
 model Project {
@@ -95,4 +96,37 @@ model Project {
   product     Product?  @relation(fields: [productId], references: [id])
   issues      Issue[]
 }
+
+model Build {
+  id          String   @id @default(cuid())
+  branch      String   @default("main")
+  status      String   @default("Success") // Success, Failure, Building
+  commitMsg   String?
+  commitHash  String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  repoId      String?
+  repo        Repository? @relation(fields: [repoId], references: [id])
+}
+
+model Environment {
+  id          String   @id @default(cuid())
+  name        String   // Production, Staging, Development
+  url         String?
+  status      String   @default("Healthy") // Healthy, Degraded, Offline
+  version     String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+}
+
+model ActivityLog {
+  id          String   @id @default(cuid())
+  actor       String   // Human, Antigravity, System
+  actorIcon   String?  // Avatar or icon name
+  action      String
+  target      String?  // E.g. FLX-105
+  createdAt   DateTime @default(now())
+}
+
 
