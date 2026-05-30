@@ -20,6 +20,22 @@ export async function POST(req: Request) {
         }
     });
 
+    // Find or dynamically register the corresponding Code Repository
+    let repo = null;
+    if (body.service) {
+        repo = await prisma.repository.findFirst({
+            where: { name: { equals: body.service, mode: 'insensitive' } }
+        });
+        if (!repo) {
+            repo = await prisma.repository.create({
+                data: {
+                    name: body.service,
+                    url: null
+                }
+            });
+        }
+    }
+
     // Auto-compute the next logical ID
     const count = await prisma.issue.count();
     const identifier = `FLX-${100 + count + 1}`;
@@ -31,7 +47,9 @@ export async function POST(req: Request) {
             description: body.description || 'DevOps Orchestrator emitted a failure event. Ensure system stability.',
             priority: 'High',
             status: 'Todo',
-            cycleId: activeCycle ? activeCycle.id : null
+            cycleId: activeCycle ? activeCycle.id : null,
+            repoId: repo ? repo.id : null,
+            productId: repo ? repo.productId : null
         }
     });
 
