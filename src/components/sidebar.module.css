@@ -1,0 +1,90 @@
+.sidebar {
+  width: 240px;
+  background-color: var(--sidebar-bg);
+  border-right: 1px solid var(--border-color);
+  display: flex;
+  flex-direction: column;
+  padding: 16px 12px;
+  transition: width 0.2s ease;
+}
+
+.header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  margin-bottom: 24px;
+  color: var(--text-primary);
+  font-weight: 600;
+  font-size: 14px;
+}
+
+.brandIcon {
+  width: 20px;
+  height: 20px;
+  background-color: var(--accent);
+  border-radius: 4px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: white;
+}
+
+.navGroup {
+  margin-bottom: 24px;
+}
+
+.navGroupTitle {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-muted);
+  padding: 4px 12px;
+  margin-bottom: 8px;
+  font-weight: 600;
+}
+
+.navItem {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 12px;
+  border-radius: 6px;
+  color: var(--text-muted);
+  font-size: 13px;
+  font-weight: 500;
+  transition: all 0.1s ease;
+  cursor: pointer;
+}
+
+.navItem:hover {
+  background-color: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.navItem.active {
+  background-color: rgba(255, 255, 255, 0.08);
+  color: var(--text-primary);
+}
+
+.navItemIcon {
+  width: 16px;
+  height: 16px;
+  opacity: 0.8;
+}
+
+.shortcut {
+  margin-left: auto;
+  font-size: 11px;
+  color: var(--text-muted);
+  background: rgba(255,255,255,0.1);
+  padding: 2px 6px;
+  border-radius: 4px;
+  display: none;
+}
+
+.navItem:hover .shortcut {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}

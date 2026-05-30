@@ -1,0 +1,46 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model Issue {
+  id          String   @id @default(cuid())
+  identifier  String   @unique
+  title       String
+  description String?
+  status      String   @default("Todo")
+  priority    String   @default("Medium")
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  
+  cycleId     String?
+  cycle       Cycle?   @relation(fields: [cycleId], references: [id])
+  roadmapId   String?
+  roadmap     Roadmap? @relation(fields: [roadmapId], references: [id])
+}
+
+model Roadmap {
+  id          String   @id @default(cuid())
+  name        String
+  description String?
+  status      String   @default("Planned")
+  targetDate  DateTime?
+  issues      Issue[]
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+}
+
+model Cycle {
+  id          String   @id @default(cuid())
+  name        String
+  startDate   DateTime
+  endDate     DateTime
+  isActive    Boolean  @default(false)
+  issues      Issue[]
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+}

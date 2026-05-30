@@ -1,0 +1,88 @@
+.overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.4);
+  backdrop-filter: blur(2px);
+  z-index: 9998;
+}
+
+.dialog {
+  position: fixed;
+  top: 20%;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 90%;
+  max-width: 600px;
+  background: var(--app-bg);
+  border: 1px solid var(--border-color);
+  border-radius: 12px;
+  box-shadow: 0 16px 70px rgba(0, 0, 0, 0.4), 0 0 0 100vw rgba(0, 0, 0, 0.3);
+  z-index: 9999;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  font-family: inherit;
+}
+
+/* cmdk automatically renders the dialog wrap in an overlay, but depending on the version we might style the dialog natively this way */
+
+.input {
+  width: 100%;
+  padding: 16px;
+  font-size: 16px;
+  background: transparent;
+  border: none;
+  border-bottom: 1px solid var(--border-color);
+  color: var(--text-primary);
+  outline: none;
+}
+
+.input::placeholder {
+  color: var(--text-muted);
+}
+
+.list {
+  max-height: 400px;
+  overflow-y: auto;
+  padding: 8px;
+}
+
+.empty {
+  padding: 24px;
+  text-align: center;
+  color: var(--text-muted);
+  font-size: 14px;
+}
+
+/* This targets the internal cmdk group heading */
+.dialog [cmdk-group-heading] {
+  padding: 8px;
+  font-size: 11px;
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-muted);
+}
+
+.item {
+  display: flex;
+  align-items: center;
+  padding: 12px 12px;
+  font-size: 14px;
+  color: var(--text-primary);
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.icon {
+  margin-right: 12px;
+  color: var(--text-muted);
+}
+
+.item[aria-selected="true"] {
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.item[aria-selected="true"] .icon {
+  color: var(--text-primary);
+}
