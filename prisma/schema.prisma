@@ -69,6 +69,7 @@ model Product {
   roadmaps    Roadmap[]
   issues      Issue[]
   changeLogs  ChangeLog[]
+  documents   Document[]
 }
 
 model Repository {
@@ -83,6 +84,7 @@ model Repository {
   issues      Issue[]
   builds      Build[]
   changeLogs  ChangeLog[]
+  documents   Document[]
 }
 
 model Project {
@@ -98,6 +100,7 @@ model Project {
   productId   String?
   product     Product?  @relation(fields: [productId], references: [id])
   issues      Issue[]
+  documents   Document[]
 }
 
 model Build {
@@ -148,6 +151,23 @@ model ChangeLog {
   repo          Repository? @relation(fields: [repoId], references: [id])
   productId     String?
   product       Product?    @relation(fields: [productId], references: [id])
+}
+
+model Document {
+  id          String   @id @default(cuid())
+  title       String
+  slug        String   @unique
+  content     String   // Markdown article content
+  category    String   @default("General") // Architecture, Schema, API, Guide, General
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  productId   String?
+  product     Product?    @relation(fields: [productId], references: [id])
+  repoId      String?
+  repo        Repository? @relation(fields: [repoId], references: [id])
+  projectId   String?
+  project     Project?    @relation(fields: [projectId], references: [id])
 }
 
 
