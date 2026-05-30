@@ -1,7 +1,7 @@
 'use client';
 
 import styles from './sidebar.module.css';
-import { Layers, CheckCircle2, Map, Users, Settings, Plus, Search, Package, Rocket, GitBranch } from 'lucide-react';
+import { Layers, CheckCircle2, Map, Users, Settings, Plus, Search, Package, Rocket, GitBranch, ShieldCheck } from 'lucide-react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 
@@ -74,6 +74,14 @@ export default function Sidebar() {
         <Link href="/repositories" className={`${styles.navItem} ${isLinkActive('/repositories') ? styles.active : ''}`} style={{ textDecoration: 'none' }}>
           <GitBranch size={16} className={styles.navItemIcon} />
           Repositories
+        </Link>
+      </div>
+
+      <div className={styles.navGroup}>
+        <div className={styles.navGroupTitle}>Operations</div>
+        <Link href="/change-control" className={`${styles.navItem} ${isLinkActive('/change-control') ? styles.active : ''}`} style={{ textDecoration: 'none' }}>
+          <ShieldCheck size={16} className={styles.navItemIcon} />
+          Change Control
         </Link>
       </div>
 
