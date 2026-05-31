@@ -1,7 +1,7 @@
 'use client';
 
 import styles from './sidebar.module.css';
-import { Layers, CheckCircle2, Map, Users, Settings, Plus, Search, Package, Rocket, GitBranch, ShieldCheck, BookOpen } from 'lucide-react';
+import { Layers, CheckCircle2, Map, Users, Settings, Plus, Search, Package, Rocket, GitBranch, ShieldCheck, BookOpen, Cpu } from 'lucide-react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 
@@ -86,6 +86,10 @@ export default function Sidebar() {
         <Link href="/docs" className={`${styles.navItem} ${isLinkActive('/docs') ? styles.active : ''}`} style={{ textDecoration: 'none' }}>
           <BookOpen size={16} className={styles.navItemIcon} />
           Documentation
+        </Link>
+        <Link href="/automations" className={`${styles.navItem} ${isLinkActive('/automations') ? styles.active : ''}`} style={{ textDecoration: 'none' }}>
+          <Cpu size={16} className={styles.navItemIcon} />
+          Automations
         </Link>
       </div>
 
