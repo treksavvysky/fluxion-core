@@ -514,7 +514,7 @@ mcpServer.setRequestHandler(CallToolRequestSchema, async (request) => {
   }
 
   throw new Error(`Tool not found: ${request.params.name}`);
-}
 });
+
 
 
