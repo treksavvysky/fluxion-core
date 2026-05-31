@@ -59,7 +59,9 @@ model Cycle {
 
 model Product {
   id          String       @id @default(cuid())
+  slug        String       @unique
   name        String
+  status      String       @default("Active")
   description String?
   createdAt   DateTime     @default(now())
   updatedAt   DateTime     @updatedAt

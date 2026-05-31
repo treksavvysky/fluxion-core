@@ -329,15 +329,28 @@ mcpServer.setRequestHandler(CallToolRequestSchema, async (request) => {
   if (request.params.name === 'create_product') {
     const args = request.params.arguments as any;
     if (!args?.name) throw new Error('Missing name');
+
+    let slugBase = args.name.toUpperCase().replace(/[^A-Z0-9]+/g, '-').replace(/(^-|-$)+/g, '');
+    if (slugBase.length > 10) slugBase = slugBase.substring(0, 10);
+    if (slugBase.length < 2) slugBase = 'PROD';
+
+    let slug = slugBase;
+    const existing = await prisma.product.findUnique({ where: { slug } });
+    if (existing) {
+      slug = `${slugBase.substring(0, 6)}-${Math.floor(Math.random() * 1000)}`;
+    }
+
     const p = await prisma.product.create({
       data: {
         name: args.name,
-        description: args.description || null
+        slug,
+        description: args.description || null,
+        status: 'Active'
       }
     });
     try { revalidatePath('/'); } catch (e) {}
     return {
-      content: [{ type: 'text', text: `Successfully created product ${p.name}` }]
+      content: [{ type: 'text', text: `Successfully created product ${p.name} with slug ${p.slug}` }]
     };
   }
 
