@@ -158,6 +158,61 @@ mcpServer.setRequestHandler(ListToolsRequestSchema, async () => {
           },
           required: ['issueId']
         }
+      },
+      {
+        name: 'read_document',
+        description: 'Read a technical document or architecture wiki article from the Documentation Hub.',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            slug: { type: 'string', description: 'The unique URL slug of the document' }
+          },
+          required: ['slug']
+        }
+      },
+      {
+        name: 'write_document',
+        description: 'Create or update a technical document or architecture wiki article in the Documentation Hub.',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            title: { type: 'string', description: 'The title of the document' },
+            content: { type: 'string', description: 'Markdown formatted content of the document' },
+            category: { type: 'string', description: 'Category (Architecture, Schema, API, Guides, General)' },
+            productId: { type: 'string', description: 'Optional UUID of the associated Product' },
+            repoId: { type: 'string', description: 'Optional UUID of the associated Repository' },
+            projectId: { type: 'string', description: 'Optional UUID of the associated Project' }
+          },
+          required: ['title', 'content']
+        }
+      },
+      {
+        name: 'create_change_log',
+        description: 'Create a new Change Control audit log (e.g. database migration, release version deploy).',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            type: { type: 'string', description: 'Deployment, Migration, API Release, Config Change' },
+            description: { type: 'string', description: 'Detailed description of the change' },
+            reason: { type: 'string', description: 'Why this change was made / rationale' },
+            approvedBy: { type: 'string', description: 'Name of the human approver (e.g., George Loudon)' },
+            implementedBy: { type: 'string', description: 'Name of the runner (e.g., Antigravity or George Loudon)' },
+            productId: { type: 'string', description: 'Optional UUID of the Product scope' },
+            repoId: { type: 'string', description: 'Optional UUID of the Repository scope' },
+            issueId: { type: 'string', description: 'Optional UUID of the associated Issue' }
+          },
+          required: ['type', 'description', 'approvedBy', 'implementedBy']
+        }
+      },
+      {
+        name: 'query_telemetry',
+        description: 'Query live operations telemetry status: environments, active builds, and activities.',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            type: { type: 'string', description: 'Filter by type: builds, environments, activities' }
+          }
+        }
       }
     ]
   };
@@ -370,7 +425,96 @@ mcpServer.setRequestHandler(CallToolRequestSchema, async (request) => {
     };
   }
 
+  if (request.params.name === 'read_document') {
+    const args = request.params.arguments as any;
+    if (!args?.slug) throw new Error('Missing slug');
+    const doc = await prisma.document.findUnique({
+      where: { slug: args.slug },
+      include: { product: true, repo: true, project: true }
+    });
+    if (!doc) {
+      return { content: [{ type: 'text', text: `Document with slug ${args.slug} not found.` }], isError: true };
+    }
+    return {
+      content: [{ type: 'text', text: JSON.stringify(doc, null, 2) }]
+    };
+  }
+
+  if (request.params.name === 'write_document') {
+    const args = request.params.arguments as any;
+    if (!args?.title || !args?.content) throw new Error('Missing title or content');
+    
+    let slug = args.title.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)+/g, '');
+    const existing = await prisma.document.findUnique({ where: { slug } });
+    if (existing) {
+      slug = `${slug}-${Math.floor(Math.random() * 1000)}`;
+    }
+
+    const doc = await prisma.document.create({
+      data: {
+        title: args.title,
+        slug,
+        content: args.content,
+        category: args.category || 'General',
+        productId: args.productId || null,
+        repoId: args.repoId || null,
+        projectId: args.projectId || null
+      }
+    });
+
+    try { revalidatePath('/docs'); } catch (e) {}
+    return {
+      content: [{ type: 'text', text: `Successfully published document ${doc.title} at slug: ${doc.slug}` }]
+    };
+  }
+
+  if (request.params.name === 'create_change_log') {
+    const args = request.params.arguments as any;
+    if (!args?.type || !args?.description || !args?.approvedBy || !args?.implementedBy) {
+      throw new Error('Missing required change_log fields');
+    }
+
+    const log = await prisma.changeLog.create({
+      data: {
+        type: args.type,
+        description: args.description,
+        reason: args.reason || null,
+        approvedBy: args.approvedBy,
+        implementedBy: args.implementedBy,
+        productId: args.productId || null,
+        repoId: args.repoId || null,
+        issueId: args.issueId || null
+      }
+    });
+
+    try { revalidatePath('/change-control'); } catch (e) {}
+    return {
+      content: [{ type: 'text', text: `Successfully registered Change Control audit log ID ${log.id} for type: ${log.type}.` }]
+    };
+  }
+
+  if (request.params.name === 'query_telemetry') {
+    const args = request.params.arguments as any;
+    const type = args?.type;
+    
+    let results: any = {};
+    if (!type || type === 'environments') {
+      results.environments = await prisma.environment.findMany({ orderBy: { name: 'asc' } });
+    }
+    if (!type || type === 'builds') {
+      results.builds = await prisma.build.findMany({ orderBy: { createdAt: 'desc' }, take: 10, include: { repo: true } });
+    }
+    if (!type || type === 'activities') {
+      results.activities = await prisma.activityLog.findMany({ orderBy: { createdAt: 'desc' }, take: 10 });
+    }
+
+    return {
+      content: [{ type: 'text', text: JSON.stringify(results, null, 2) }]
+    };
+  }
+
   throw new Error(`Tool not found: ${request.params.name}`);
+}
 });
 
 
