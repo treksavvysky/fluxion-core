@@ -106,3 +106,145 @@ export async function unarchiveProduct(id: string) {
   revalidatePath('/products');
   return product;
 }
+
+export async function getProductMetrics(productId: string) {
+  const issues = await prisma.issue.findMany({
+    where: { productId }
+  });
+
+  const openIssues = issues.filter(i => i.status !== 'Done');
+  const closedIssues = issues.filter(i => i.status === 'Done');
+
+  // Let's count "defects" as issues with 'bug', 'defect', 'error', 'fail' in title/description (case insensitive)
+  const defects = issues.filter(i => {
+    const text = `${i.title} ${i.description || ''}`.toLowerCase();
+    return text.includes('bug') || text.includes('defect') || text.includes('error') || text.includes('fail');
+  });
+  const openDefects = defects.filter(d => d.status !== 'Done').length;
+  const closedDefects = defects.filter(d => d.status === 'Done').length;
+
+  // Technical Debt Score: High = 8 pts, Medium = 4 pts, Low = 2 pts
+  const openIssuesForDebt = issues.filter(i => i.status !== 'Done');
+  const techDebtPoints = openIssuesForDebt.reduce((sum, i) => {
+    if (i.priority === 'High') return sum + 8;
+    if (i.priority === 'Medium') return sum + 4;
+    return sum + 2; // Low or other
+  }, 0);
+
+  // Roadmap completion
+  const roadmaps = await prisma.roadmap.findMany({
+    where: { productId },
+    include: {
+      issues: { select: { status: true } }
+    }
+  });
+
+  let totalRoadmapIssues = 0;
+  let completedRoadmapIssues = 0;
+  roadmaps.forEach(r => {
+    totalRoadmapIssues += r.issues.length;
+    completedRoadmapIssues += r.issues.filter(i => i.status === 'Done').length;
+  });
+
+  const roadmapCompletion = totalRoadmapIssues > 0 
+    ? Math.round((completedRoadmapIssues / totalRoadmapIssues) * 100) 
+    : 0;
+
+  return {
+    openIssues: openIssues.length,
+    closedIssues: closedIssues.length,
+    openDefects,
+    closedDefects,
+    techDebtPoints,
+    roadmapCompletion,
+    totalRoadmaps: roadmaps.length
+  };
+}
+
+export async function linkProductToRepository(productId: string, repositoryId: string, pathFilter?: string) {
+  const link = await prisma.productRepository.upsert({
+    where: {
+      productId_repositoryId: { productId, repositoryId }
+    },
+    update: {
+      pathFilter: pathFilter || null
+    },
+    create: {
+      productId,
+      repositoryId,
+      pathFilter: pathFilter || null
+    }
+  });
+
+  revalidatePath('/products');
+  revalidatePath('/repositories');
+  return link;
+}
+
+export async function unlinkProductFromRepository(productId: string, repositoryId: string) {
+  const link = await prisma.productRepository.delete({
+    where: {
+      productId_repositoryId: { productId, repositoryId }
+    }
+  });
+
+  revalidatePath('/products');
+  revalidatePath('/repositories');
+  return link;
+}
+
+export async function getProductRepositories(productId: string) {
+  return prisma.productRepository.findMany({
+    where: { productId },
+    include: {
+      repository: true
+    }
+  });
+}
+
+export async function getCyclesWithProductMetrics(productId: string | null) {
+  const cycles = await prisma.cycle.findMany({
+    orderBy: { startDate: 'desc' },
+    include: {
+      issues: {
+        where: productId && productId !== 'all' ? { productId } : undefined,
+        select: { id: true, status: true, priority: true }
+      }
+    }
+  });
+
+  return cycles.map(cycle => {
+    const totalIssues = cycle.issues.length;
+    const completedIssues = cycle.issues.filter(i => i.status === 'Done').length;
+    const completionRate = totalIssues > 0 ? Math.round((completedIssues / totalIssues) * 100) : 0;
+    
+    // Sprint velocity: High=3pts, Medium=2pts, Low=1pt
+    const velocity = cycle.issues
+      .filter(i => i.status === 'Done')
+      .reduce((sum, i) => {
+        if (i.priority === 'High') return sum + 3;
+        if (i.priority === 'Medium') return sum + 2;
+        return sum + 1;
+      }, 0);
+
+    const totalPoints = cycle.issues
+      .reduce((sum, i) => {
+        if (i.priority === 'High') return sum + 3;
+        if (i.priority === 'Medium') return sum + 2;
+        return sum + 1;
+      }, 0);
+
+    return {
+      id: cycle.id,
+      name: cycle.name,
+      startDate: cycle.startDate,
+      endDate: cycle.endDate,
+      isActive: cycle.isActive,
+      totalIssues,
+      completedIssues,
+      completionRate,
+      velocity,
+      totalPoints
+    };
+  });
+}

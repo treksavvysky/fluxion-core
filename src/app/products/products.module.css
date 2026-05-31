@@ -61,7 +61,7 @@
 
 .tableHeader {
   display: grid;
-  grid-template-columns: 80px 220px 100px 1fr 200px 100px;
+  grid-template-columns: 70px 160px 80px 1fr 140px 110px 90px 100px 70px;
   gap: 16px;
   padding: 10px 16px;
   border-bottom: 1px solid var(--border-color);
@@ -74,7 +74,7 @@
 
 .productRow {
   display: grid;
-  grid-template-columns: 80px 220px 100px 1fr 200px 100px;
+  grid-template-columns: 70px 160px 80px 1fr 140px 110px 90px 100px 70px;
   gap: 16px;
   padding: 16px;
   align-items: center;
@@ -129,13 +129,13 @@
 }
 
 .descCell {
-  font-size: 13.5px;
+  font-size: 13px;
   color: var(--text-muted);
   line-height: 1.4;
 }
 
 .assetsCell {
-  font-size: 12.5px;
+  font-size: 12px;
   color: var(--text-muted);
 }
 
@@ -175,4 +175,62 @@
 
 .activateBtn:hover {
   background: rgba(16, 185, 129, 0.12);
+}
+
+.techDebtHigh {
+  background: rgba(245, 158, 11, 0.1);
+  color: #f59e0b;
+  border: 1px solid rgba(245, 158, 11, 0.25);
+  font-size: 11px;
+  font-weight: 700;
+  padding: 2px 6px;
+  border-radius: 4px;
+  display: inline-block;
+}
+
+.techDebtMedium {
+  background: rgba(59, 130, 246, 0.1);
+  color: #3b82f6;
+  border: 1px solid rgba(59, 130, 246, 0.25);
+  font-size: 11px;
+  font-weight: 700;
+  padding: 2px 6px;
+  border-radius: 4px;
+  display: inline-block;
+}
+
+.techDebtLow {
+  background: rgba(16, 185, 129, 0.1);
+  color: #10b981;
+  border: 1px solid rgba(16, 185, 129, 0.25);
+  font-size: 11px;
+  font-weight: 700;
+  padding: 2px 6px;
+  border-radius: 4px;
+  display: inline-block;
+}
+
+.roadmapProgress {
+  background: rgba(255, 255, 255, 0.08);
+  border-radius: 10px;
+  height: 6px;
+  width: 100%;
+  position: relative;
+  overflow: hidden;
+  margin-top: 4px;
+}
+
+.roadmapProgressBar {
+  background: var(--accent);
+  height: 100%;
+  border-radius: 10px;
+  transition: width 0.3s ease;
+}
+
+.defectsBadge {
+  font-size: 12px;
+  color: var(--text-primary);
+  display: inline-flex;
+  gap: 6px;
+  align-items: center;
 }

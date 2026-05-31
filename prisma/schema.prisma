@@ -66,12 +66,13 @@ model Product {
   createdAt   DateTime     @default(now())
   updatedAt   DateTime     @updatedAt
 
-  projects    Project[]
-  repos       Repository[]
-  roadmaps    Roadmap[]
-  issues      Issue[]
-  changeLogs  ChangeLog[]
-  documents   Document[]
+  projects     Project[]
+  repos        Repository[]
+  roadmaps     Roadmap[]
+  issues       Issue[]
+  changeLogs   ChangeLog[]
+  documents    Document[]
+  repositories ProductRepository[]
 }
 
 model Repository {
@@ -87,6 +88,20 @@ model Repository {
   builds      Build[]
   changeLogs  ChangeLog[]
   documents   Document[]
+  products    ProductRepository[]
+}
+
+model ProductRepository {
+  id           String     @id @default(cuid())
+  productId    String
+  product      Product    @relation(fields: [productId], references: [id], onDelete: Cascade)
+  repositoryId String
+  repository   Repository @relation(fields: [repositoryId], references: [id], onDelete: Cascade)
+  pathFilter   String?    // e.g. "src/services/auth/*" for monorepos mapping
+  createdAt    DateTime   @default(now())
+  updatedAt    DateTime   @updatedAt
+
+  @@unique([productId, repositoryId])
 }
 
 model Project {

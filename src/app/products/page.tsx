@@ -1,7 +1,7 @@
 import styles from './products.module.css';
-import { getProducts, archiveProduct, unarchiveProduct } from '@/actions/products';
+import { getProducts, archiveProduct, unarchiveProduct, getProductMetrics } from '@/actions/products';
 import { prisma } from '@/lib/prisma';
-import { Package, Plus } from 'lucide-react';
+import { Package, Plus, ShieldAlert } from 'lucide-react';
 import NewProductModal from '@/components/NewProductModal';
 import Link from 'next/link';
 
@@ -23,6 +23,17 @@ export default async function ProductsPage({ searchParams }: { searchParams: Pro
     });
     products = await getProducts();
   }
+
+  // Gather metrics for all products
+  const productsWithMetrics = await Promise.all(
+    products.map(async (p) => {
+      const metrics = await getProductMetrics(p.id);
+      return {
+        ...p,
+        metrics
+      };
+    })
+  );
 
   return (
     <>
@@ -52,53 +63,88 @@ export default async function ProductsPage({ searchParams }: { searchParams: Pro
             <div>Product Name</div>
             <div style={{ textAlign: 'center' }}>Status</div>
             <div>Scope Description</div>
-            <div>Assets & Issues</div>
+            <div>Deliverables</div>
+            <div>Defects (O/C)</div>
+            <div>Tech Debt</div>
+            <div>Roadmap %</div>
             <div style={{ textAlign: 'right' }}>Actions</div>
           </div>
 
           <div className={styles.issueList} style={{ display: 'flex', flexDirection: 'column' }}>
-            {products.map(p => (
-              <div key={p.id} className={styles.productRow}>
-                <div>
-                  <span className={styles.slugCell}>{p.slug}</span>
+            {productsWithMetrics.map(p => {
+              const debtClass = p.metrics.techDebtPoints > 15 
+                ? styles.techDebtHigh 
+                : p.metrics.techDebtPoints > 5 
+                  ? styles.techDebtMedium 
+                  : styles.techDebtLow;
+
+              return (
+                <div key={p.id} className={styles.productRow}>
+                  <div>
+                    <span className={styles.slugCell}>{p.slug}</span>
+                  </div>
+                  <div className={styles.nameCell}>
+                    {p.name}
+                  </div>
+                  <div>
+                    <span className={`${styles.statusPill} ${p.status === 'Archived' ? styles.statusArchived : styles.statusActive}`}>
+                      {p.status}
+                    </span>
+                  </div>
+                  <div className={styles.descCell}>
+                    {p.description || 'No domain description provided.'}
+                  </div>
+                  <div className={styles.assetsCell}>
+                    {p._count.repos} repos • {p._count.projects} projects
+                  </div>
+                  <div>
+                    <span className={styles.defectsBadge}>
+                      <ShieldAlert size={13} style={{ color: p.metrics.openDefects > 0 ? '#f59e0b' : '#10b981' }} />
+                      <span style={{ fontWeight: 600, color: p.metrics.openDefects > 0 ? '#f59e0b' : 'inherit' }}>
+                        {p.metrics.openDefects}
+                      </span>
+                      <span style={{ color: 'var(--text-muted)' }}>/</span>
+                      <span style={{ color: 'var(--text-muted)' }}>{p.metrics.closedDefects}</span>
+                    </span>
+                  </div>
+                  <div>
+                    <span className={debtClass}>
+                      {p.metrics.techDebtPoints} pts
+                    </span>
+                  </div>
+                  <div>
+                    <div style={{ fontSize: '11px', fontWeight: 600, display: 'flex', justifyContent: 'space-between', paddingRight: '12px' }}>
+                      <span>{p.metrics.roadmapCompletion}%</span>
+                      <span style={{ color: 'var(--text-muted)' }}>{p.metrics.totalRoadmaps} maps</span>
+                    </div>
+                    <div className={styles.roadmapProgress}>
+                      <div className={styles.roadmapProgressBar} style={{ width: `${p.metrics.roadmapCompletion}%` }}></div>
+                    </div>
+                  </div>
+                  <div className={styles.actionsCell}>
+                    {p.status === 'Active' ? (
+                      <form action={async () => {
+                        'use server';
+                        await archiveProduct(p.id);
+                      }}>
+                        <button type="submit" className={styles.archiveBtn}>
+                          Archive
+                        </button>
+                      </form>
+                    ) : (
+                      <form action={async () => {
+                        'use server';
+                        await unarchiveProduct(p.id);
+                      }}>
+                        <button type="submit" className={styles.activateBtn}>
+                          Activate
+                        </button>
+                      </form>
+                    )}
+                  </div>
                 </div>
-                <div className={styles.nameCell}>
-                  {p.name}
-                </div>
-                <div>
-                  <span className={`${styles.statusPill} ${p.status === 'Archived' ? styles.statusArchived : styles.statusActive}`}>
-                    {p.status}
-                  </span>
-                </div>
-                <div className={styles.descCell}>
-                  {p.description || 'No domain description provided.'}
-                </div>
-                <div className={styles.assetsCell}>
-                  {p._count.repos} repos • {p._count.projects} projects • {p._count.issues} issues
-                </div>
-                <div className={styles.actionsCell}>
-                  {p.status === 'Active' ? (
-                    <form action={async () => {
-                      'use server';
-                      await archiveProduct(p.id);
-                    }}>
-                      <button type="submit" className={styles.archiveBtn}>
-                        Archive
-                      </button>
-                    </form>
-                  ) : (
-                    <form action={async () => {
-                      'use server';
-                      await unarchiveProduct(p.id);
-                    }}>
-                      <button type="submit" className={styles.activateBtn}>
-                        Activate
-                      </button>
-                    </form>
-                  )}
-                </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
         </div>
       </div>
