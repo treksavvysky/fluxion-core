@@ -460,7 +460,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   if (req.method !== 'GET') return res.status(405).end();
 
-  // Prevent response buffering (Nginx, Next.js proxy, etc.) for SSE stream
+  // Prevent response buffering and stream dropping (Nginx, Next.js dev server, CDNs)
+  res.setHeader('Content-Type', 'text/event-stream');
+  res.setHeader('Cache-Control', 'no-cache, no-transform');
+  res.setHeader('Connection', 'keep-alive');
   res.setHeader('X-Accel-Buffering', 'no');
 
   if (mcpState.transport) {
@@ -477,11 +480,29 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   if (res.flushHeaders) {
     res.flushHeaders();
   }
+
+  // Periodic keep-alive heartbeat ping every 15 seconds to prevent idle socket drop
+  const heartbeatInterval = setInterval(() => {
+    if (!res.writableEnded) {
+      res.write(':\n\n'); // SSE comment line
+      if ((res as any).flush) {
+        (res as any).flush();
+      }
+    }
+  }, 15000);
   
   res.socket?.on('close', () => {
+    clearInterval(heartbeatInterval);
     mcpState.transport = null;
   });
 }
+
+// Next.js API config to allow long-running asynchronous execution streams
+export const config = {
+  api: {
+    externalResolver: true,
+  },
+};
 
 
 
