@@ -1,5 +1,5 @@
-import { mcpServer } from '@/lib/mcp';
-import { mcpState } from '@/lib/mcp-state';
+import { createMcpServer } from '@/lib/mcp';
+import { addTransport, removeTransport } from '@/lib/mcp-state';
 import { listToolSchemas, callTool } from '@/lib/mcp-tools';
 import { SSEServerTransport } from '@modelcontextprotocol/sdk/server/sse.js';
 import type { NextApiRequest, NextApiResponse } from 'next';
@@ -82,22 +82,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   res.setHeader('Connection', 'keep-alive');
   res.setHeader('X-Accel-Buffering', 'no');
 
-  if (mcpState.transport) {
-    try {
-      await mcpServer.close();
-    } catch {
-      // previous transport already torn down
-    }
-  }
-
+  // Per-session transport (FLX-113): each connection gets its own Server +
+  // transport, registered by sessionId. Concurrent clients coexist; a new
+  // connection no longer tears down existing ones. The SDK appends
+  // sessionId=<uuid> to the advertised messages endpoint automatically.
+  const server = createMcpServer();
   const transport = new SSEServerTransport(`/api/mcp/messages?token=${providedKey || ''}`, res as unknown as ServerResponse);
-  mcpState.transport = transport;
-
-  await mcpServer.connect(transport);
-
-  if (res.flushHeaders) {
-    res.flushHeaders();
-  }
+  addTransport(transport);
 
   // Periodic keep-alive heartbeat ping every 15 seconds to prevent idle socket drop
   const flushable = res as NextApiResponse & { flush?: () => void };
@@ -108,10 +99,24 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     }
   }, 15000);
 
-  res.socket?.on('close', () => {
+  // Deregister on disconnect. res.socket is not reliably populated under
+  // next start, so hook the SDK's own close signal (fired from its
+  // res.on('close') listener) plus the response 'close' event directly.
+  let cleaned = false;
+  const cleanup = () => {
+    if (cleaned) return;
+    cleaned = true;
     clearInterval(heartbeatInterval);
-    mcpState.transport = null;
-  });
+    removeTransport(transport.sessionId);
+  };
+  server.onclose = cleanup;
+  res.on('close', cleanup);
+
+  await server.connect(transport);
+
+  if (res.flushHeaders) {
+    res.flushHeaders();
+  }
 }
 
 // Next.js API config to allow long-running asynchronous execution streams

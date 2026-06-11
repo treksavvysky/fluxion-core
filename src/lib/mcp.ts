@@ -2,21 +2,26 @@ import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js';
 import { listToolSchemas, callTool } from './mcp-tools';
 
-export const mcpServer = new Server({
-  name: 'fluxion-core-mcp',
-  version: '1.0.0'
-}, {
-  capabilities: {
-    tools: {}
-  }
-});
+// The SDK binds one Server instance to one transport, so each SSE session
+// gets its own Server. All instances serve the shared registry in
+// src/lib/mcp-tools.ts (as does the HTTP JSON-RPC handler in pages/api/mcp).
+export function createMcpServer(): Server {
+  const server = new Server({
+    name: 'fluxion-core-mcp',
+    version: '1.0.0'
+  }, {
+    capabilities: {
+      tools: {}
+    }
+  });
 
-// Both transports (SSE here, HTTP JSON-RPC in pages/api/mcp) serve the
-// shared registry in src/lib/mcp-tools.ts.
-mcpServer.setRequestHandler(ListToolsRequestSchema, async () => {
-  return { tools: listToolSchemas() };
-});
+  server.setRequestHandler(ListToolsRequestSchema, async () => {
+    return { tools: listToolSchemas() };
+  });
 
-mcpServer.setRequestHandler(CallToolRequestSchema, async (request) => {
-  return callTool(request.params.name, request.params.arguments);
-});
+  server.setRequestHandler(CallToolRequestSchema, async (request) => {
+    return callTool(request.params.name, request.params.arguments);
+  });
+
+  return server;
+}
