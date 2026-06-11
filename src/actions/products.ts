@@ -2,6 +2,7 @@
 
 import { prisma } from '@/lib/prisma';
 import { revalidatePath } from 'next/cache';
+import { computeProductMetrics } from '@/lib/metrics';
 
 export async function getProducts() {
   return prisma.product.findMany({
@@ -108,57 +109,7 @@ export async function unarchiveProduct(id: string) {
 }
 
 export async function getProductMetrics(productId: string) {
-  const issues = await prisma.issue.findMany({
-    where: { productId }
-  });
-
-  const openIssues = issues.filter(i => i.status !== 'Done');
-  const closedIssues = issues.filter(i => i.status === 'Done');
-
-  // Let's count "defects" as issues with 'bug', 'defect', 'error', 'fail' in title/description (case insensitive)
-  const defects = issues.filter(i => {
-    const text = `${i.title} ${i.description || ''}`.toLowerCase();
-    return text.includes('bug') || text.includes('defect') || text.includes('error') || text.includes('fail');
-  });
-  const openDefects = defects.filter(d => d.status !== 'Done').length;
-  const closedDefects = defects.filter(d => d.status === 'Done').length;
-
-  // Technical Debt Score: High = 8 pts, Medium = 4 pts, Low = 2 pts
-  const openIssuesForDebt = issues.filter(i => i.status !== 'Done');
-  const techDebtPoints = openIssuesForDebt.reduce((sum, i) => {
-    if (i.priority === 'High') return sum + 8;
-    if (i.priority === 'Medium') return sum + 4;
-    return sum + 2; // Low or other
-  }, 0);
-
-  // Roadmap completion
-  const roadmaps = await prisma.roadmap.findMany({
-    where: { productId },
-    include: {
-      issues: { select: { status: true } }
-    }
-  });
-
-  let totalRoadmapIssues = 0;
-  let completedRoadmapIssues = 0;
-  roadmaps.forEach(r => {
-    totalRoadmapIssues += r.issues.length;
-    completedRoadmapIssues += r.issues.filter(i => i.status === 'Done').length;
-  });
-
-  const roadmapCompletion = totalRoadmapIssues > 0 
-    ? Math.round((completedRoadmapIssues / totalRoadmapIssues) * 100) 
-    : 0;
-
-  return {
-    openIssues: openIssues.length,
-    closedIssues: closedIssues.length,
-    openDefects,
-    closedDefects,
-    techDebtPoints,
-    roadmapCompletion,
-    totalRoadmaps: roadmaps.length
-  };
+  return computeProductMetrics(productId);
 }
 
 export async function linkProductToRepository(productId: string, repositoryId: string, pathFilter?: string) {
