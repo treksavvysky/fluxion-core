@@ -1,6 +1,7 @@
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js';
 import { prisma } from './prisma';
+import { createNamespacedIssue } from './issues';
 import { revalidatePath } from 'next/cache';
 
 export const mcpServer = new Server({
@@ -40,7 +41,7 @@ mcpServer.setRequestHandler(ListToolsRequestSchema, async () => {
       },
       {
         name: 'create_issue',
-        description: 'Create a new issue inside the Fluxion Core database.',
+        description: 'Create a new issue inside the Fluxion Core database. The issue identifier is minted under the product namespace (e.g. TRAIL-SYNC-4); without a product it lands in the FLX workspace.',
         inputSchema: {
           type: 'object',
           properties: {
@@ -49,7 +50,9 @@ mcpServer.setRequestHandler(ListToolsRequestSchema, async () => {
             priority: { type: 'string', description: 'Priority level (Low, Medium, High)' },
             status: { type: 'string', description: 'Initial status (Todo, In Progress, Done, Backlog)' },
             cycleId: { type: 'string', description: 'Optional UUID of the cycle to associate the issue with' },
-            roadmapId: { type: 'string', description: 'Optional UUID of the roadmap to associate the issue with' }
+            roadmapId: { type: 'string', description: 'Optional UUID of the roadmap to associate the issue with' },
+            productId: { type: 'string', description: 'Optional UUID of the product whose namespace the issue belongs to' },
+            productSlug: { type: 'string', description: 'Optional product slug (e.g. TRAIL-SYNC) as an alternative to productId' }
           },
           required: ['title']
         }
@@ -250,20 +253,16 @@ mcpServer.setRequestHandler(CallToolRequestSchema, async (request) => {
   if (request.params.name === 'create_issue') {
     const args = request.params.arguments as any;
     if (!args?.title) throw new Error('Missing title');
-    
-    const count = await prisma.issue.count();
-    const identifier = `FLX-${101 + count}`;
-    
-    const newIssue = await prisma.issue.create({
-      data: {
-        identifier,
-        title: args.title,
-        description: args.description || null,
-        priority: args.priority || 'Medium',
-        status: args.status || 'Todo',
-        cycleId: args.cycleId || null,
-        roadmapId: args.roadmapId || null
-      }
+
+    const newIssue = await createNamespacedIssue({
+      title: args.title,
+      description: args.description,
+      priority: args.priority,
+      status: args.status,
+      cycleId: args.cycleId,
+      roadmapId: args.roadmapId,
+      productId: args.productId,
+      productSlug: args.productSlug
     });
 
     try {

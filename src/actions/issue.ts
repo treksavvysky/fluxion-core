@@ -4,7 +4,7 @@ import { prisma } from '@/lib/prisma';
 import { Prisma } from '@prisma/client';
 import { revalidatePath } from 'next/cache';
 import { redirect } from 'next/navigation';
-import { nextIssueIdentifier } from '@/lib/identifiers';
+import { createNamespacedIssue } from '@/lib/issues';
 
 export async function getIssues(filter?: { productSlug?: string }) {
   return prisma.issue.findMany({
@@ -39,26 +39,14 @@ export async function createIssue(formData: FormData) {
 
   if (!title) return; // Basic validation handling
 
-  // Issues are keyed under their product's namespace (TRAIL-SYNC-4);
-  // unassigned issues fall back to the FLX workspace namespace.
-  let slug = 'FLX';
-  if (productId !== 'none') {
-    const product = await prisma.product.findUnique({ where: { id: productId } });
-    if (product) slug = product.slug;
-  }
-  const identifier = await nextIssueIdentifier(prisma, slug, slug === 'FLX' ? 100 : 0);
-
-  await prisma.issue.create({
-    data: {
-      identifier,
-      title,
-      description,
-      priority,
-      status: 'Todo',
-      productId: productId === 'none' ? null : productId,
-      projectId: projectId === 'none' ? null : projectId,
-      repoId: repoId === 'none' ? null : repoId,
-    },
+  await createNamespacedIssue({
+    title,
+    description,
+    priority,
+    status: 'Todo',
+    productId: productId === 'none' ? null : productId,
+    projectId: projectId === 'none' ? null : projectId,
+    repoId: repoId === 'none' ? null : repoId,
   });
 
   revalidatePath('/');

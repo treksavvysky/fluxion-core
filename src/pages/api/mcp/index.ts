@@ -3,6 +3,7 @@ import { mcpState } from '@/lib/mcp-state';
 import { SSEServerTransport } from '@modelcontextprotocol/sdk/server/sse.js';
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { prisma } from '@/lib/prisma';
+import { createNamespacedIssue } from '@/lib/issues';
 import { revalidatePath } from 'next/cache';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
@@ -73,7 +74,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
               },
               {
                 name: 'create_issue',
-                description: 'Create a new issue inside the Fluxion Core database.',
+                description: 'Create a new issue inside the Fluxion Core database. The issue identifier is minted under the product namespace (e.g. TRAIL-SYNC-4); without a product it lands in the FLX workspace.',
                 inputSchema: {
                   type: 'object',
                   properties: {
@@ -82,7 +83,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
                     priority: { type: 'string', description: 'Priority level (Low, Medium, High)' },
                     status: { type: 'string', description: 'Initial status (Todo, In Progress, Done, Backlog)' },
                     cycleId: { type: 'string', description: 'Optional UUID of the cycle to associate the issue with' },
-                    roadmapId: { type: 'string', description: 'Optional UUID of the roadmap to associate the issue with' }
+                    roadmapId: { type: 'string', description: 'Optional UUID of the roadmap to associate the issue with' },
+                    productId: { type: 'string', description: 'Optional UUID of the product whose namespace the issue belongs to' },
+                    productSlug: { type: 'string', description: 'Optional product slug (e.g. TRAIL-SYNC) as an alternative to productId' }
                   },
                   required: ['title']
                 }
@@ -232,18 +235,15 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
         if (toolName === 'create_issue') {
           if (!args?.title) throw new Error('Missing title');
-          const count = await prisma.issue.count();
-          const identifier = `FLX-${101 + count}`;
-          const newIssue = await prisma.issue.create({
-            data: {
-              identifier,
-              title: args.title,
-              description: args.description || null,
-              priority: args.priority || 'Medium',
-              status: args.status || 'Todo',
-              cycleId: args.cycleId || null,
-              roadmapId: args.roadmapId || null
-            }
+          const newIssue = await createNamespacedIssue({
+            title: args.title,
+            description: args.description,
+            priority: args.priority,
+            status: args.status,
+            cycleId: args.cycleId,
+            roadmapId: args.roadmapId,
+            productId: args.productId,
+            productSlug: args.productSlug
           });
           try { revalidatePath('/'); revalidatePath('/cycles'); } catch (e) {}
           return res.status(200).json({
