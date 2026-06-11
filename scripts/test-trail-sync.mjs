@@ -138,6 +138,18 @@ const batchRow = await prisma.syncBatch.findUnique({
 check('SyncBatch row persisted', !!batchRow);
 check('per-delta transaction log persisted', batchRow?.deltas.length === 3);
 
+// --- Cleanup: remove everything this run created (set KEEP_DATA=1 to skip) ---
+if (!process.env.KEEP_DATA) {
+  const issue3 = r3.json.results?.find((r) => r.seq === 3)?.resultRef;
+  const created = [issue1, issue2, issue3].filter(Boolean);
+  const rows = await prisma.issue.findMany({ where: { identifier: { in: created } }, select: { id: true } });
+  await prisma.changeLog.deleteMany({ where: { issueId: { in: rows.map((r) => r.id) } } });
+  await prisma.issue.deleteMany({ where: { id: { in: rows.map((r) => r.id) } } });
+  await prisma.syncBatch.deleteMany({ where: { batchKey: { contains: RUN } } });
+  await prisma.activityLog.deleteMany({ where: { actor: 'trail-sync-lens', action: { contains: RUN } } });
+  console.log(`\nCleaned up ${created.length} test issues and this run's sync batches/logs.`);
+}
+
 await prisma.$disconnect();
 console.log(`\n${failures === 0 ? 'ALL CHECKS PASSED' : `${failures} CHECK(S) FAILED`}`);
 process.exit(failures === 0 ? 0 : 1);
