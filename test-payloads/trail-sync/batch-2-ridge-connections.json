@@ -1,0 +1,39 @@
+{
+  "batchKey": "ridge-mam-sodhail-__RUN__",
+  "source": "trail-sync-lens",
+  "deviceId": "lens-unit-07",
+  "capturedAt": "__NOW__",
+  "deltas": [
+    {
+      "seq": 1,
+      "op": "issue.approve",
+      "clientTimestamp": "__T_MINUS_30M__",
+      "targetRef": "__ISSUE_1__",
+      "payload": {
+        "approvedStatus": "Done",
+        "approvedBy": "George Loudon",
+        "reason": "High-gain antenna profile held GPS lock across the full ridge connection; fix confirmed in the field."
+      }
+    },
+    {
+      "seq": 2,
+      "op": "issue.update",
+      "clientTimestamp": "__T_MINUS_20M__",
+      "targetRef": "__ISSUE_2__",
+      "payload": {
+        "status": "In Progress",
+        "priority": "High"
+      }
+    },
+    {
+      "seq": 3,
+      "op": "roadmap.update",
+      "clientTimestamp": "__T_MINUS_10M__",
+      "targetRef": "Trail Telemetry GA",
+      "payload": {
+        "status": "Active",
+        "description": "Ridge-connection sync validated end to end; GA scope now covers offline approval queues."
+      }
+    }
+  ]
+}

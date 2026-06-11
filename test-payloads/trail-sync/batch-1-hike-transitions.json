@@ -1,0 +1,40 @@
+{
+  "batchKey": "hike-glen-affric-__RUN__",
+  "source": "trail-sync-lens",
+  "deviceId": "lens-unit-07",
+  "capturedAt": "__NOW__",
+  "deltas": [
+    {
+      "seq": 1,
+      "op": "issue.create",
+      "clientTimestamp": "__T_MINUS_3H__",
+      "payload": {
+        "clientRef": "local-a1",
+        "title": "Waypoint telemetry gap during Carn Eige ascent",
+        "description": "Device lost GPS lock for 14 minutes between waypoints 23 and 24 while transitioning above the treeline.",
+        "priority": "High"
+      }
+    },
+    {
+      "seq": 2,
+      "op": "issue.create",
+      "clientTimestamp": "__T_MINUS_2H__",
+      "payload": {
+        "clientRef": "local-a2",
+        "title": "Elevation drift exceeds 15m in canopy sections",
+        "description": "Barometric altimeter and GPS elevation disagree by up to 18m under dense canopy on the descent transition.",
+        "priority": "Medium"
+      }
+    },
+    {
+      "seq": 3,
+      "op": "issue.update",
+      "clientTimestamp": "__T_MINUS_1H__",
+      "targetRef": "local-a1",
+      "payload": {
+        "status": "In Progress",
+        "description": "Device lost GPS lock for 14 minutes between waypoints 23 and 24. Field workaround: switched antenna profile to high-gain; monitoring next ascent transition."
+      }
+    }
+  ]
+}

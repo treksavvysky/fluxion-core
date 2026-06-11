@@ -73,6 +73,7 @@ model Product {
   changeLogs   ChangeLog[]
   documents    Document[]
   repositories ProductRepository[]
+  syncBatches  SyncBatch[]
 }
 
 model Repository {
@@ -196,6 +197,42 @@ model AutomationRule {
   isActive    Boolean  @default(true)
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
+}
+
+model SyncBatch {
+  id            String      @id @default(cuid())
+  batchKey      String      @unique // Client-generated idempotency key; replays return the stored result
+  source        String      @default("trail-sync-lens")
+  deviceId      String?
+  status        String      @default("Pending") // Pending, Applied, Partial, Failed
+  deltaCount    Int         @default(0)
+  appliedCount  Int         @default(0)
+  conflictCount Int         @default(0)
+  rejectedCount Int         @default(0)
+  capturedAt    DateTime?   // When the offline session ended on the device
+  createdAt     DateTime    @default(now())
+  updatedAt     DateTime    @updatedAt
+
+  productId     String?
+  product       Product?    @relation(fields: [productId], references: [id])
+  deltas        SyncDelta[]
+}
+
+model SyncDelta {
+  id              String    @id @default(cuid())
+  batchId         String
+  batch           SyncBatch @relation(fields: [batchId], references: [id], onDelete: Cascade)
+  seq             Int
+  op              String    // issue.create, issue.update, issue.approve, roadmap.update
+  targetRef       String?   // Issue identifier (TRAIL-SYNC-3) or roadmap name being mutated
+  payload         Json
+  clientTimestamp DateTime  // When the operation happened on the offline device
+  status          String    @default("Pending") // Applied, Conflict, Rejected
+  resolution      String?   // Outcome detail, e.g. conflict reason
+  resultRef       String?   // Identifier of the entity that was created/updated
+  createdAt       DateTime  @default(now())
+
+  @@unique([batchId, seq])
 }
 
 

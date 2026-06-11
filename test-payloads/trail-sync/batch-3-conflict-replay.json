@@ -1,0 +1,38 @@
+{
+  "batchKey": "stale-bothy-replay-__RUN__",
+  "source": "trail-sync-lens",
+  "deviceId": "lens-unit-03",
+  "capturedAt": "__NOW__",
+  "deltas": [
+    {
+      "seq": 1,
+      "op": "issue.update",
+      "clientTimestamp": "2026-01-01T08:00:00.000Z",
+      "targetRef": "__ISSUE_1__",
+      "payload": {
+        "status": "Todo",
+        "description": "Stale offline edit from a device that was powered off in a bothy for months — must NOT overwrite newer server state."
+      }
+    },
+    {
+      "seq": 2,
+      "op": "issue.update",
+      "clientTimestamp": "__T_MINUS_10M__",
+      "targetRef": "TRAIL-SYNC-99999",
+      "payload": {
+        "status": "Done"
+      }
+    },
+    {
+      "seq": 3,
+      "op": "issue.create",
+      "clientTimestamp": "__T_MINUS_5M__",
+      "payload": {
+        "clientRef": "local-c1",
+        "title": "Battery sag under 0°C during summit transition",
+        "description": "Pack voltage dropped 11% in 20 minutes at the exposed summit connection; needs cold-weather power profile.",
+        "priority": "High"
+      }
+    }
+  ]
+}
