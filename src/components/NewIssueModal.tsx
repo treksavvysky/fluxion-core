@@ -48,6 +48,18 @@ export default function NewIssueModal({
               <textarea id="description" name="description" className={styles.textarea} placeholder="Add a description..."></textarea>
             </div>
             <div className={styles.formRow}>
+              <label htmlFor="context" className={styles.label}>Context</label>
+              <textarea id="context" name="context" className={styles.textarea} placeholder="Why this work exists; what an executor must know... (optional)"></textarea>
+            </div>
+            <div className={styles.formRow}>
+              <label htmlFor="acceptanceCriteria" className={styles.label}>Acceptance Criteria</label>
+              <textarea id="acceptanceCriteria" name="acceptanceCriteria" className={styles.textarea} placeholder="Verifiable conditions that define Done... (optional)"></textarea>
+            </div>
+            <div className={styles.formRow}>
+              <label htmlFor="technicalIntent" className={styles.label}>Technical Intent</label>
+              <textarea id="technicalIntent" name="technicalIntent" className={styles.textarea} placeholder="Intended approach or constraints... (optional)"></textarea>
+            </div>
+            <div className={styles.formRow}>
               <label htmlFor="priority" className={styles.label}>Priority</label>
               <select id="priority" name="priority" className={styles.select} defaultValue="Medium">
                 <option value="Low">Low</option>

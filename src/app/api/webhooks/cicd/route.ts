@@ -41,11 +41,14 @@ export async function POST(req: Request) {
         }
     }
 
+    // Webhook-born issues land in Triage: they are unvetted signals, not
+    // committed work, until a human or agent promotes them.
     const issue = await createNamespacedIssue({
         title: `[CRITICAL] Pipeline Failure: ${body.service || 'Unknown System'}`,
         description: body.description || 'DevOps Orchestrator emitted a failure event. Ensure system stability.',
+        context: `Auto-created from a CI/CD failure webhook.\n- Service: ${body.service || 'unknown'}\n- Branch: ${body.branch || 'unknown'}\n- Received: ${new Date().toISOString()}`,
         priority: 'High',
-        status: 'Todo',
+        status: 'Triage',
         cycleId: activeCycle ? activeCycle.id : null,
         repoId: repo ? repo.id : null,
         productId: repo ? repo.productId : null
@@ -57,7 +60,8 @@ export async function POST(req: Request) {
 
     return NextResponse.json({ success: true, ingestedIssue: issue }, { status: 201 });
 
-  } catch (error: any) {
-    return NextResponse.json({ error: error.message }, { status: 500 });
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : String(error);
+    return NextResponse.json({ error: message }, { status: 500 });
   }
 }

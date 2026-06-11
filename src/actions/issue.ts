@@ -4,7 +4,7 @@ import { prisma } from '@/lib/prisma';
 import { Prisma } from '@prisma/client';
 import { revalidatePath } from 'next/cache';
 import { redirect } from 'next/navigation';
-import { createNamespacedIssue } from '@/lib/issues';
+import { createNamespacedIssue, assertValidTransition } from '@/lib/issues';
 
 export async function getIssues(filter?: { productSlug?: string }) {
   return prisma.issue.findMany({
@@ -24,7 +24,9 @@ export async function getIssueById(id: string) {
     include: {
       product: { select: { name: true } },
       project: { select: { name: true } },
-      repo: { select: { name: true } }
+      repo: { select: { name: true } },
+      parent: { select: { id: true, identifier: true, title: true } },
+      children: { select: { id: true, identifier: true, title: true, status: true }, orderBy: { identifier: 'asc' } }
     }
   });
 }
@@ -44,6 +46,9 @@ export async function createIssue(formData: FormData) {
     description,
     priority,
     status: 'Todo',
+    context: (formData.get('context') as string) || null,
+    acceptanceCriteria: (formData.get('acceptanceCriteria') as string) || null,
+    technicalIntent: (formData.get('technicalIntent') as string) || null,
     productId: productId === 'none' ? null : productId,
     projectId: projectId === 'none' ? null : projectId,
     repoId: repoId === 'none' ? null : repoId,
@@ -54,11 +59,15 @@ export async function createIssue(formData: FormData) {
 }
 
 export async function updateIssueStatus(id: string, newStatus: string) {
+  const issue = await prisma.issue.findUnique({ where: { id } });
+  if (!issue) throw new Error('Issue not found');
+  assertValidTransition(issue.status, newStatus);
+
   await prisma.issue.update({
     where: { id },
     data: { status: newStatus },
   });
-  
+
   revalidatePath('/');
 }
 

@@ -3,7 +3,18 @@
 import { updateIssueStatus } from '@/actions/issue';
 import { useTransition } from 'react';
 
-export default function StatusUpdater({ issueId, currentStatus }: { issueId: string, currentStatus: string }) {
+// Options are the legal next states computed server-side from the status
+// transition graph (src/lib/issues.ts) — the select can't express an
+// illegal transition.
+export default function StatusUpdater({
+  issueId,
+  currentStatus,
+  allowedStatuses,
+}: {
+  issueId: string;
+  currentStatus: string;
+  allowedStatuses: string[];
+}) {
   const [isPending, startTransition] = useTransition();
 
   const handleChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
@@ -14,9 +25,9 @@ export default function StatusUpdater({ issueId, currentStatus }: { issueId: str
   }
 
   return (
-    <select 
+    <select
       disabled={isPending}
-      value={currentStatus} 
+      value={currentStatus}
       onChange={handleChange}
       style={{
         background: 'rgba(255, 255, 255, 0.05)',
@@ -29,10 +40,10 @@ export default function StatusUpdater({ issueId, currentStatus }: { issueId: str
         cursor: isPending ? 'not-allowed' : 'pointer'
       }}
     >
-      <option value="Todo" style={{ background: 'var(--app-bg)' }}>Todo</option>
-      <option value="In Progress" style={{ background: 'var(--app-bg)' }}>In Progress</option>
-      <option value="Done" style={{ background: 'var(--app-bg)' }}>Done</option>
-      <option value="Backlog" style={{ background: 'var(--app-bg)' }}>Backlog</option>
+      <option value={currentStatus} style={{ background: 'var(--app-bg)' }}>{currentStatus}</option>
+      {allowedStatuses.filter(s => s !== currentStatus).map(s => (
+        <option key={s} value={s} style={{ background: 'var(--app-bg)' }}>{s}</option>
+      ))}
     </select>
   );
 }

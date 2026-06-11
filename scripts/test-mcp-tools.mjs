@@ -35,8 +35,8 @@ const textOf = (r) => r?.result?.content?.[0]?.text ?? '';
 console.log('1. tools/list (HTTP surface, previously drifted to 13 tools)');
 const list = await rpc('tools/list');
 const names = (list?.result?.tools ?? []).map((t) => t.name);
-check('21 tools listed', names.length === 21, `got ${names.length}: ${names.join(', ')}`);
-for (const t of ['update_issue', 'search', 'read_product_metrics', 'archive_product', 'read_document', 'write_document', 'create_change_log', 'query_telemetry']) {
+check('22 tools listed', names.length === 22, `got ${names.length}: ${names.join(', ')}`);
+for (const t of ['update_issue', 'search', 'read_product_metrics', 'archive_product', 'read_document', 'write_document', 'create_change_log', 'query_telemetry', 'read_issue']) {
   check(`${t} present`, names.includes(t));
 }
 
@@ -86,8 +86,39 @@ check('status is Archived', prow?.status === 'Archived');
 const ar2 = await call('archive_product', { productSlug: scratchSlug });
 check('idempotent re-archive message', textOf(ar2).includes('already archived'));
 
+// --- 6. Issue protocol layer (FLX-117) ---
+console.log('\n6. Issue protocol: contract fields, hierarchy, state machine');
+const parent = await call('create_issue', {
+  title: '[SCRATCH] protocol parent',
+  status: 'Triage',
+  context: 'why this exists',
+  acceptanceCriteria: '- it works',
+  technicalIntent: 'do it well',
+});
+const parentId2 = textOf(parent).match(/FLX-\d+/)?.[0];
+check('create with Triage status + contract fields', !!parentId2, textOf(parent));
+
+const child = await call('create_issue', { title: '[SCRATCH] protocol child', parentIdentifier: parentId2 });
+const childId = textOf(child).match(/FLX-\d+/)?.[0];
+check('create with parentIdentifier', !!childId, textOf(child));
+
+const full = await call('read_issue', { identifier: parentId2 });
+const fullRes = JSON.parse(textOf(full));
+check('read_issue returns contract fields', fullRes.context === 'why this exists' && fullRes.acceptanceCriteria === '- it works' && fullRes.technicalIntent === 'do it well');
+check('read_issue returns children', fullRes.children?.some((c) => c.identifier === childId));
+check('read_issue lists allowed transitions from Triage', Array.isArray(fullRes.allowedNextStatuses) && fullRes.allowedNextStatuses.includes('Todo') && !fullRes.allowedNextStatuses.includes('Done'));
+
+const badTransition = await call('update_issue', { identifier: parentId2, status: 'Done' });
+check('illegal transition Triage->Done rejected with allowed states', !!badTransition.error && badTransition.error.message.includes('Allowed from'), JSON.stringify(badTransition.error ?? badTransition));
+
+const goodTransition = await call('update_issue', { identifier: parentId2, status: 'In Progress' });
+check('legal transition Triage->In Progress applied', textOf(goodTransition).includes('status'), JSON.stringify(goodTransition));
+
+const detach = await call('update_issue', { identifier: childId, parentIdentifier: 'none' });
+check('child detached via parentIdentifier none', textOf(detach).includes('parentId'), JSON.stringify(detach));
+
 // --- Cleanup ---
-await prisma.issue.deleteMany({ where: { identifier: scratchId ?? '' } });
+await prisma.issue.deleteMany({ where: { identifier: { in: [scratchId, childId, parentId2].filter(Boolean) } } });
 if (scratchSlug) await prisma.product.delete({ where: { slug: scratchSlug } });
 console.log('\nScratch entities cleaned up.');
 

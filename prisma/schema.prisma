@@ -12,11 +12,22 @@ model Issue {
   identifier  String   @unique
   title       String
   description String?
-  status      String   @default("Todo")
+  status      String   @default("Todo") // Triage, Backlog, Todo, In Progress, Done, Cancelled — transitions enforced in src/lib/issues.ts
   priority    String   @default("Medium")
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
-  
+
+  // Agent contract (FLX-117): structured markdown handoff fields so an
+  // agent can ingest an issue and act with near-zero ambiguity.
+  context            String? // Why this work exists; surrounding state an executor must know
+  acceptanceCriteria String? // Verifiable conditions that define "Done"
+  technicalIntent    String? // Intended approach/constraints, when they matter
+
+  // Goal tree (FLX-117): parent-child decomposition
+  parentId    String?
+  parent      Issue?   @relation("IssueHierarchy", fields: [parentId], references: [id])
+  children    Issue[]  @relation("IssueHierarchy")
+
   cycleId     String?
   cycle       Cycle?   @relation(fields: [cycleId], references: [id])
   roadmapId   String?

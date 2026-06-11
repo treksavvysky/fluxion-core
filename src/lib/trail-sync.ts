@@ -1,6 +1,7 @@
 import { prisma } from '@/lib/prisma';
 import { Prisma } from '@prisma/client';
 import { nextIssueIdentifier } from '@/lib/identifiers';
+import { VALID_PRIORITIES, isValidStatus, assertValidTransition } from '@/lib/issues';
 
 // FLX-111: Trail-Mode Protocol Delta Ingest & Offline Synchronization.
 // Reconciles transaction-logged delta batches captured offline by trail-sync-lens
@@ -13,8 +14,6 @@ import { nextIssueIdentifier } from '@/lib/identifiers';
 export const TRAIL_SYNC_SLUG = 'TRAIL-SYNC';
 
 const VALID_OPS = ['issue.create', 'issue.update', 'issue.approve', 'roadmap.update'] as const;
-const VALID_STATUSES = ['Backlog', 'Todo', 'In Progress', 'Done', 'Cancelled'];
-const VALID_PRIORITIES = ['Low', 'Medium', 'High', 'Critical'];
 
 export type TrailSyncOp = (typeof VALID_OPS)[number];
 
@@ -164,10 +163,10 @@ async function applyDelta(
     }
     const status = asString(p.status) ?? 'Todo';
     const priority = asString(p.priority) ?? 'Medium';
-    if (!VALID_STATUSES.includes(status)) {
+    if (!isValidStatus(status)) {
       return { seq: delta.seq, op: delta.op, status: 'Rejected', resolution: `Invalid status "${status}"` };
     }
-    if (!VALID_PRIORITIES.includes(priority)) {
+    if (!(VALID_PRIORITIES as readonly string[]).includes(priority)) {
       return { seq: delta.seq, op: delta.op, status: 'Rejected', resolution: `Invalid priority "${priority}"` };
     }
     const identifier = await nextIssueIdentifier(tx, productSlug);
@@ -210,8 +209,10 @@ async function applyDelta(
 
     if (delta.op === 'issue.approve') {
       const approvedStatus = asString(p.approvedStatus) ?? 'Done';
-      if (!VALID_STATUSES.includes(approvedStatus)) {
-        return { seq: delta.seq, op: delta.op, status: 'Rejected', resolution: `Invalid approvedStatus "${approvedStatus}"` };
+      try {
+        assertValidTransition(issue.status, approvedStatus);
+      } catch (e) {
+        return { seq: delta.seq, op: delta.op, status: 'Rejected', resolution: e instanceof Error ? e.message : String(e) };
       }
       const approvedBy = asString(p.approvedBy) ?? 'trail-sync-lens';
       await tx.issue.update({ where: { id: issue.id }, data: { status: approvedStatus } });
@@ -234,13 +235,15 @@ async function applyDelta(
     const status = asString(p.status);
     const priority = asString(p.priority);
     if (status) {
-      if (!VALID_STATUSES.includes(status)) {
-        return { seq: delta.seq, op: delta.op, status: 'Rejected', resolution: `Invalid status "${status}"` };
+      try {
+        assertValidTransition(issue.status, status);
+      } catch (e) {
+        return { seq: delta.seq, op: delta.op, status: 'Rejected', resolution: e instanceof Error ? e.message : String(e) };
       }
       data.status = status;
     }
     if (priority) {
-      if (!VALID_PRIORITIES.includes(priority)) {
+      if (!(VALID_PRIORITIES as readonly string[]).includes(priority)) {
         return { seq: delta.seq, op: delta.op, status: 'Rejected', resolution: `Invalid priority "${priority}"` };
       }
       data.priority = priority;

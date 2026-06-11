@@ -1,5 +1,5 @@
 import { prisma } from './prisma';
-import { createNamespacedIssue } from './issues';
+import { createNamespacedIssue, assertValidTransition, allowedNextStatuses, VALID_STATUSES } from './issues';
 import { computeProductMetrics } from './metrics';
 import { multiIndexSearch } from './search';
 import { revalidatePath } from 'next/cache';
@@ -75,24 +75,59 @@ export const mcpTools: ToolDef[] = [
     },
     handler: async (args) => {
       const issues = await prisma.issue.findMany({
-        where: args?.status ? { status: args.status } : undefined
+        where: args?.status ? { status: args.status } : undefined,
+        include: {
+          parent: { select: { identifier: true } },
+          _count: { select: { children: true } }
+        }
       });
       return json(issues);
     }
   },
   {
-    name: 'update_status',
-    description: 'Update the status of a specific issue.',
+    name: 'read_issue',
+    description: 'Read one issue in full, including the agent contract fields (context, acceptanceCriteria, technicalIntent), parent/children hierarchy, assignments, and the statuses it may legally transition to. The intended first call before executing a task.',
     inputSchema: {
       type: 'object',
       properties: {
         issueId: { type: 'string', description: 'The UUID of the issue' },
-        status: { type: 'string', description: 'The new status (Todo, In Progress, Done)' }
+        identifier: { type: 'string', description: 'The human identifier (e.g. FLX-117), as an alternative to issueId' }
+      }
+    },
+    handler: async (args) => {
+      const resolved = await resolveIssue(args ?? {});
+      if (!resolved) throw new Error('Issue not found: provide a valid issueId or identifier');
+      const issue = await prisma.issue.findUnique({
+        where: { id: resolved.id },
+        include: {
+          product: { select: { slug: true, name: true } },
+          project: { select: { name: true } },
+          repo: { select: { name: true } },
+          cycle: { select: { name: true } },
+          roadmap: { select: { name: true } },
+          parent: { select: { identifier: true, title: true, status: true } },
+          children: { select: { identifier: true, title: true, status: true }, orderBy: { identifier: 'asc' } }
+        }
+      });
+      return json({ ...issue, allowedNextStatuses: allowedNextStatuses(issue!.status) });
+    }
+  },
+  {
+    name: 'update_status',
+    description: `Update the status of a specific issue. Statuses: ${VALID_STATUSES.join(', ')}. Transitions are enforced; an illegal transition returns the allowed next states.`,
+    inputSchema: {
+      type: 'object',
+      properties: {
+        issueId: { type: 'string', description: 'The UUID of the issue' },
+        status: { type: 'string', description: 'The new status' }
       },
       required: ['issueId', 'status']
     },
     handler: async (args) => {
       if (!args?.issueId || !args?.status) throw new Error('Missing args');
+      const issue = await prisma.issue.findUnique({ where: { id: args.issueId } });
+      if (!issue) throw new Error(`Issue not found for id: ${args.issueId}`);
+      assertValidTransition(issue.status, args.status);
       const updated = await prisma.issue.update({
         where: { id: args.issueId },
         data: { status: args.status }
@@ -103,7 +138,7 @@ export const mcpTools: ToolDef[] = [
   },
   {
     name: 'update_issue',
-    description: 'Update the fields of an existing issue (title, description, priority, status). Identify the issue by UUID or by its human identifier (e.g. FLX-112).',
+    description: `Update the fields of an existing issue: title, description, priority, status (transitions enforced; statuses: ${VALID_STATUSES.join(', ')}), the agent contract fields (context, acceptanceCriteria, technicalIntent), or the parent issue. Identify the issue by UUID or by its human identifier (e.g. FLX-112).`,
     inputSchema: {
       type: 'object',
       properties: {
@@ -112,20 +147,41 @@ export const mcpTools: ToolDef[] = [
         title: { type: 'string', description: 'New title' },
         description: { type: 'string', description: 'New description' },
         priority: { type: 'string', description: 'New priority (Low, Medium, High, Critical)' },
-        status: { type: 'string', description: 'New status (Backlog, Todo, In Progress, Done, Cancelled)' }
+        status: { type: 'string', description: 'New status (transition is validated against the current state)' },
+        context: { type: 'string', description: 'Agent contract: why this work exists and the surrounding state an executor must know (markdown)' },
+        acceptanceCriteria: { type: 'string', description: 'Agent contract: verifiable conditions that define Done (markdown)' },
+        technicalIntent: { type: 'string', description: 'Agent contract: intended approach or constraints (markdown)' },
+        parentIdentifier: { type: 'string', description: 'Identifier of the parent issue (e.g. FLX-117), or "none" to detach' }
       }
     },
     handler: async (args) => {
       const issue = await resolveIssue(args ?? {});
       if (!issue) throw new Error('Issue not found: provide a valid issueId or identifier');
 
-      const data: Record<string, string> = {};
+      const data: Record<string, string | null> = {};
       if (typeof args.title === 'string' && args.title.trim()) data.title = args.title.trim();
       if (typeof args.description === 'string') data.description = args.description;
+      if (typeof args.context === 'string') data.context = args.context;
+      if (typeof args.acceptanceCriteria === 'string') data.acceptanceCriteria = args.acceptanceCriteria;
+      if (typeof args.technicalIntent === 'string') data.technicalIntent = args.technicalIntent;
       if (typeof args.priority === 'string' && args.priority.trim()) data.priority = args.priority.trim();
-      if (typeof args.status === 'string' && args.status.trim()) data.status = args.status.trim();
+      if (typeof args.status === 'string' && args.status.trim()) {
+        assertValidTransition(issue.status, args.status.trim());
+        data.status = args.status.trim();
+      }
+      if (typeof args.parentIdentifier === 'string' && args.parentIdentifier.trim()) {
+        const ref = args.parentIdentifier.trim();
+        if (ref.toLowerCase() === 'none') {
+          data.parentId = null;
+        } else {
+          const parent = await prisma.issue.findUnique({ where: { identifier: ref.toUpperCase() } });
+          if (!parent) throw new Error(`Parent issue not found for identifier: ${ref}`);
+          if (parent.id === issue.id) throw new Error('An issue cannot be its own parent');
+          data.parentId = parent.id;
+        }
+      }
       if (Object.keys(data).length === 0) {
-        throw new Error('No updatable fields provided (title, description, priority, status)');
+        throw new Error('No updatable fields provided (title, description, priority, status, context, acceptanceCriteria, technicalIntent, parentIdentifier)');
       }
 
       const updated = await prisma.issue.update({ where: { id: issue.id }, data });
@@ -135,14 +191,18 @@ export const mcpTools: ToolDef[] = [
   },
   {
     name: 'create_issue',
-    description: 'Create a new issue inside the Fluxion Core database. The issue identifier is minted under the product namespace (e.g. TRAIL-SYNC-4); without a product it lands in the FLX workspace.',
+    description: `Create a new issue inside the Fluxion Core database. The issue identifier is minted under the product namespace (e.g. TRAIL-SYNC-4); without a product it lands in the FLX workspace. Provide the agent contract fields (context, acceptanceCriteria, technicalIntent) whenever the issue is intended for autonomous execution. Statuses: ${VALID_STATUSES.join(', ')}.`,
     inputSchema: {
       type: 'object',
       properties: {
         title: { type: 'string', description: 'The title of the issue' },
         description: { type: 'string', description: 'Detailed description of the issue' },
-        priority: { type: 'string', description: 'Priority level (Low, Medium, High)' },
-        status: { type: 'string', description: 'Initial status (Todo, In Progress, Done, Backlog)' },
+        context: { type: 'string', description: 'Agent contract: why this work exists and the surrounding state an executor must know (markdown)' },
+        acceptanceCriteria: { type: 'string', description: 'Agent contract: verifiable conditions that define Done (markdown)' },
+        technicalIntent: { type: 'string', description: 'Agent contract: intended approach or constraints (markdown)' },
+        priority: { type: 'string', description: 'Priority level (Low, Medium, High, Critical)' },
+        status: { type: 'string', description: 'Initial status (default Todo; use Triage for unvetted work)' },
+        parentIdentifier: { type: 'string', description: 'Identifier of the parent issue (e.g. FLX-117) to attach this as a child' },
         cycleId: { type: 'string', description: 'Optional UUID of the cycle to associate the issue with' },
         roadmapId: { type: 'string', description: 'Optional UUID of the roadmap to associate the issue with' },
         productId: { type: 'string', description: 'Optional UUID of the product whose namespace the issue belongs to' },
@@ -155,8 +215,12 @@ export const mcpTools: ToolDef[] = [
       const newIssue = await createNamespacedIssue({
         title: args.title,
         description: args.description,
+        context: args.context,
+        acceptanceCriteria: args.acceptanceCriteria,
+        technicalIntent: args.technicalIntent,
         priority: args.priority,
         status: args.status,
+        parentIdentifier: args.parentIdentifier,
         cycleId: args.cycleId,
         roadmapId: args.roadmapId,
         productId: args.productId,
