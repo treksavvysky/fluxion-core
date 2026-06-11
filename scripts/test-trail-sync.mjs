@@ -147,7 +147,15 @@ if (!process.env.KEEP_DATA) {
   await prisma.issue.deleteMany({ where: { id: { in: rows.map((r) => r.id) } } });
   await prisma.syncBatch.deleteMany({ where: { batchKey: { contains: RUN } } });
   await prisma.activityLog.deleteMany({ where: { actor: 'trail-sync-lens', action: { contains: RUN } } });
-  console.log(`\nCleaned up ${created.length} test issues and this run's sync batches/logs.`);
+  // Restore the roadmap fixture (status + backdated timestamp): the run's
+  // roadmap.update bumped updatedAt, and its sync-delta baseline was just
+  // deleted above — without a reset, a rerun within 10 minutes would
+  // correctly (but unhelpfully) conflict on the "stale" offline edit.
+  await prisma.roadmap.updateMany({
+    where: { name: roadmapName },
+    data: { status: 'Planned', updatedAt: new Date(Date.now() - 7 * 24 * 3600_000) },
+  });
+  console.log(`\nCleaned up ${created.length} test issues, this run's sync batches/logs; roadmap fixture reset.`);
 }
 
 await prisma.$disconnect();

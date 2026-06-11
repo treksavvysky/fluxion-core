@@ -4,13 +4,11 @@ import type { NextApiRequest, NextApiResponse } from 'next';
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') return res.status(405).end();
   
-  // Validate API Key if configured
+  // Validate API key; fail closed when FLUXION_API_KEY is not configured
   const apiKey = process.env.FLUXION_API_KEY;
-  if (apiKey) {
-    const providedKey = req.headers['x-api-key'] || req.query.token || req.query['api-key'];
-    if (providedKey !== apiKey) {
-      return res.status(401).json({ error: 'Unauthorized: Invalid or missing API key' });
-    }
+  const providedKey = req.headers['x-api-key'] || req.query.token || req.query['api-key'];
+  if (!apiKey || providedKey !== apiKey) {
+    return res.status(401).json({ error: 'Unauthorized: Invalid or missing API key' });
   }
 
   const transport = mcpState.transport;

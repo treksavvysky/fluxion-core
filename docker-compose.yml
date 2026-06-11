@@ -5,12 +5,6 @@ services:
       dockerfile: Dockerfile
     ports:
       - "3002:3002"
-    volumes:
-      - ./:/app
-      - /app/node_modules
-      - /app/.next
-    environment:
-      - NODE_ENV=development
     env_file:
       - .env
-    command: sh -c "npm install && npx prisma generate && npm run dev -- -p 3002"
+    restart: unless-stopped

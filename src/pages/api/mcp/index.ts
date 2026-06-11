@@ -7,9 +7,10 @@ import { createNamespacedIssue } from '@/lib/issues';
 import { revalidatePath } from 'next/cache';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+  // Fail closed when FLUXION_API_KEY is not configured
   const providedKey = req.headers['x-api-key'] || req.query.token || req.query['api-key'];
   const apiKey = process.env.FLUXION_API_KEY;
-  if (apiKey && providedKey !== apiKey) {
+  if (!apiKey || providedKey !== apiKey) {
     return res.status(401).json({ error: 'Unauthorized: Invalid or missing API key' });
   }
 

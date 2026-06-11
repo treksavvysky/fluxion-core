@@ -6,22 +6,14 @@ import {
   getRecentBatches,
   TrailSyncValidationError,
 } from '@/lib/trail-sync';
-
-function authorize(req: Request, body?: Record<string, unknown>): boolean {
-  const expectedKey = process.env.FLUXION_API_KEY || 'fluxion_secret_key_2026';
-  const authHeader = req.headers.get('authorization');
-  const providedKey =
-    (body && typeof body.apiKey === 'string' ? body.apiKey : null) ||
-    (authHeader ? authHeader.replace('Bearer ', '').trim() : null);
-  return providedKey === expectedKey;
-}
+import { isAuthorized, unauthorizedResponse } from '@/lib/api-auth';
 
 export async function POST(req: Request) {
   try {
     const body = await req.json();
 
-    if (!authorize(req, body)) {
-      return NextResponse.json({ error: 'Unauthorized: Invalid API Key' }, { status: 401 });
+    if (!isAuthorized(req, body?.apiKey)) {
+      return unauthorizedResponse();
     }
 
     const batchRequest = validateBatchRequest(body);
@@ -55,8 +47,8 @@ export async function POST(req: Request) {
 
 export async function GET(req: Request) {
   try {
-    if (!authorize(req)) {
-      return NextResponse.json({ error: 'Unauthorized: Invalid API Key' }, { status: 401 });
+    if (!isAuthorized(req)) {
+      return unauthorizedResponse();
     }
     const batches = await getRecentBatches();
     return NextResponse.json(batches, { status: 200 });

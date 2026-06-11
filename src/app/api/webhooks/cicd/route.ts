@@ -1,11 +1,16 @@
 import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/prisma';
 import { revalidatePath } from 'next/cache';
+import { isAuthorized, unauthorizedResponse } from '@/lib/api-auth';
+import { createNamespacedIssue } from '@/lib/issues';
 
 export async function POST(req: Request) {
   try {
     const body = await req.json();
-    
+    if (!isAuthorized(req, body?.apiKey)) {
+      return unauthorizedResponse();
+    }
+
     // Ensure we only ingest failures
     if (!body || body.status !== 'failure') {
         return NextResponse.json({ message: 'Ignored payload. Status must be "failure"' }, { status: 200 });
@@ -36,21 +41,14 @@ export async function POST(req: Request) {
         }
     }
 
-    // Auto-compute the next logical ID
-    const count = await prisma.issue.count();
-    const identifier = `FLX-${100 + count + 1}`;
-
-    const issue = await prisma.issue.create({
-        data: {
-            identifier,
-            title: `[CRITICAL] Pipeline Failure: ${body.service || 'Unknown System'}`,
-            description: body.description || 'DevOps Orchestrator emitted a failure event. Ensure system stability.',
-            priority: 'High',
-            status: 'Todo',
-            cycleId: activeCycle ? activeCycle.id : null,
-            repoId: repo ? repo.id : null,
-            productId: repo ? repo.productId : null
-        }
+    const issue = await createNamespacedIssue({
+        title: `[CRITICAL] Pipeline Failure: ${body.service || 'Unknown System'}`,
+        description: body.description || 'DevOps Orchestrator emitted a failure event. Ensure system stability.',
+        priority: 'High',
+        status: 'Todo',
+        cycleId: activeCycle ? activeCycle.id : null,
+        repoId: repo ? repo.id : null,
+        productId: repo ? repo.productId : null
     });
 
     // Trigger Next.js cache revalidation for all UI clients looking at the dashboard

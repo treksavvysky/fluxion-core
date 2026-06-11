@@ -7,6 +7,10 @@ import CommandPalette from '@/components/CommandPalette';
 
 const inter = Inter({ subsets: ['latin'], variable: '--font-sans' });
 
+// Every view reads live tracker state from Postgres; never serve a
+// build-time prerender. Also keeps `next build` from needing DB access.
+export const dynamic = 'force-dynamic';
+
 export const metadata: Metadata = {
   title: 'Fluxion Core',
   description: 'High-performance project management dashboard',

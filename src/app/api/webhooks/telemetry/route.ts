@@ -2,18 +2,13 @@ import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/prisma';
 import { revalidatePath } from 'next/cache';
 import { triggerAutomationEvent } from '@/actions/automation';
+import { isAuthorized, unauthorizedResponse } from '@/lib/api-auth';
 
 export async function POST(req: Request) {
   try {
-    const authHeader = req.headers.get('authorization');
     const body = await req.json();
-
-    // Authenticate the webhook request
-    const expectedKey = process.env.FLUXION_API_KEY || 'fluxion_secret_key_2026';
-    const providedKey = body.apiKey || (authHeader ? authHeader.replace('Bearer ', '').trim() : null);
-
-    if (providedKey !== expectedKey) {
-      return NextResponse.json({ error: 'Unauthorized: Invalid API Key' }, { status: 401 });
+    if (!isAuthorized(req, body?.apiKey)) {
+      return unauthorizedResponse();
     }
 
     const { type, payload } = body;
