@@ -2,6 +2,9 @@ import styles from './page.module.css';
 import { Circle, CircleDashed, CheckCircle2, Server, Terminal, Activity, GitPullRequest, Plus } from 'lucide-react';
 import { getIssues } from '@/actions/issue';
 import { getBuilds, getEnvironments, getActivityLogs } from '@/actions/telemetry';
+import { getProducts } from '@/actions/products';
+import { getProjects } from '@/actions/projects';
+import { getRepositories } from '@/actions/repositories';
 import NewIssueModal from '@/components/NewIssueModal';
 import IssuePeek from '@/components/IssuePeek';
 import Link from 'next/link';
@@ -15,16 +18,21 @@ function getStatusIcon(status: string) {
   }
 }
 
-export default async function Home({ searchParams }: { searchParams: Promise<{ new?: string, issueId?: string }> }) {
+export default async function Home({ searchParams }: { searchParams: Promise<{ new?: string, issueId?: string, product?: string }> }) {
   const params = await searchParams;
   const isNewIssueOpen = params?.new === 'true';
   const openIssueId = params?.issueId;
+  const productFilter = params?.product;
 
   // Query backlog and real-time operations telemetry
-  const issues = await getIssues();
+  const issues = await getIssues(productFilter ? { productSlug: productFilter } : undefined);
   const envs = await getEnvironments();
   const builds = await getBuilds();
   const logs = await getActivityLogs();
+  const products = await getProducts();
+  const [projects, repos] = isNewIssueOpen
+    ? await Promise.all([getProjects(), getRepositories()])
+    : [[], []];
 
   return (
     <>
@@ -84,6 +92,23 @@ export default async function Home({ searchParams }: { searchParams: Promise<{ n
               </Link>
             </div>
 
+            <div className={styles.productStrip}>
+              <Link href="/" className={`${styles.productChip} ${!productFilter ? styles.productChipActive : ''}`}>
+                All
+              </Link>
+              {products.map(product => (
+                <Link
+                  key={product.id}
+                  href={`/?product=${product.slug}`}
+                  className={`${styles.productChip} ${productFilter === product.slug ? styles.productChipActive : ''}`}
+                  title={product.name}
+                >
+                  {product.slug}
+                  <span className={styles.chipCount}>{product._count.issues}</span>
+                </Link>
+              ))}
+            </div>
+
             <div className={styles.issueList}>
               {issues.map(issue => (
                 <Link href={`/?issueId=${issue.id}`} key={issue.id} style={{ textDecoration: 'none', display: 'block' }}>
@@ -133,7 +158,7 @@ export default async function Home({ searchParams }: { searchParams: Promise<{ n
         </div>
       </div>
 
-      {isNewIssueOpen && <NewIssueModal />}
+      {isNewIssueOpen && <NewIssueModal products={products} projects={projects} repositories={repos} />}
       {openIssueId && <IssuePeek issueId={openIssueId} />}
     </>
   );

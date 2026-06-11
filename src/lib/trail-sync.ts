@@ -1,5 +1,6 @@
 import { prisma } from '@/lib/prisma';
 import { Prisma } from '@prisma/client';
+import { nextIssueIdentifier } from '@/lib/identifiers';
 
 // FLX-111: Trail-Mode Protocol Delta Ingest & Offline Synchronization.
 // Reconciles transaction-logged delta batches captured offline by trail-sync-lens
@@ -121,18 +122,6 @@ interface BatchContext {
   touched: Set<string>;
 }
 
-async function nextIdentifier(tx: Tx, slug: string): Promise<string> {
-  const existing = await tx.issue.findMany({
-    where: { identifier: { startsWith: `${slug}-` } },
-    select: { identifier: true },
-  });
-  const max = existing.reduce((acc, i) => {
-    const n = parseInt(i.identifier.slice(slug.length + 1), 10);
-    return Number.isFinite(n) && n > acc ? n : acc;
-  }, 0);
-  return `${slug}-${max + 1}`;
-}
-
 function asString(value: unknown): string | undefined {
   return typeof value === 'string' && value.trim() ? value.trim() : undefined;
 }
@@ -181,7 +170,7 @@ async function applyDelta(
     if (!VALID_PRIORITIES.includes(priority)) {
       return { seq: delta.seq, op: delta.op, status: 'Rejected', resolution: `Invalid priority "${priority}"` };
     }
-    const identifier = await nextIdentifier(tx, productSlug);
+    const identifier = await nextIssueIdentifier(tx, productSlug);
     await tx.issue.create({
       data: {
         identifier,

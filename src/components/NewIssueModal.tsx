@@ -14,7 +14,20 @@ function SubmitButton() {
   );
 }
 
-export default function NewIssueModal() {
+interface Option {
+  id: string;
+  name: string;
+}
+
+export default function NewIssueModal({
+  products = [],
+  projects = [],
+  repositories = [],
+}: {
+  products?: (Option & { slug: string })[];
+  projects?: Option[];
+  repositories?: Option[];
+}) {
   return (
     <div className={styles.backdrop}>
       <div className={styles.modal}>
@@ -41,6 +54,33 @@ export default function NewIssueModal() {
                 <option value="Medium">Medium</option>
                 <option value="High">High</option>
                 <option value="Critical">Critical</option>
+              </select>
+            </div>
+            <div className={styles.formRow}>
+              <label htmlFor="productId" className={styles.label}>Product</label>
+              <select id="productId" name="productId" className={styles.select} defaultValue="none">
+                <option value="none">No product (FLX workspace)</option>
+                {products.map(p => (
+                  <option key={p.id} value={p.id}>{p.name} ({p.slug})</option>
+                ))}
+              </select>
+            </div>
+            <div className={styles.formRow}>
+              <label htmlFor="projectId" className={styles.label}>Project</label>
+              <select id="projectId" name="projectId" className={styles.select} defaultValue="none">
+                <option value="none">No project</option>
+                {projects.map(p => (
+                  <option key={p.id} value={p.id}>{p.name}</option>
+                ))}
+              </select>
+            </div>
+            <div className={styles.formRow}>
+              <label htmlFor="repoId" className={styles.label}>Repository</label>
+              <select id="repoId" name="repoId" className={styles.select} defaultValue="none">
+                <option value="none">No repository</option>
+                {repositories.map(r => (
+                  <option key={r.id} value={r.id}>{r.name}</option>
+                ))}
               </select>
             </div>
           </div>
