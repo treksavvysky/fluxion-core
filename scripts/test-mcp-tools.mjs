@@ -238,6 +238,26 @@ const hGated = await call('hydrate_issue_context', { identifier: gatedId });
 check('hydrator annotates checklist state', textOf(hGated).includes('- [x] tests pass') && textOf(hGated).includes('- [ ] zero LINT errors'));
 await prisma.issue.deleteMany({ where: { identifier: gatedId ?? '' } });
 
+// --- 12. Fionn M4: Triage dedup on cicd webhook (FLX-124) ---
+console.log('\n12. webhook signature dedup');
+const cicd = (payload) => fetch(`${BASE_URL}/api/webhooks/cicd`, {
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${API_KEY}` },
+  body: JSON.stringify({ status: 'failure', ...payload }),
+}).then(r => r.json());
+const sig1 = await cicd({ service: 'scratch-dedup-svc', description: 'Error 137: OOM during build at 2026-06-13T10:00:00Z run 4413' });
+check('first signal files a Triage issue', !!sig1.ingestedIssue?.identifier, JSON.stringify(sig1).slice(0, 150));
+const dedupIssueId = sig1.ingestedIssue?.identifier;
+const sig2 = await cicd({ service: 'scratch-dedup-svc', description: 'Error 137: OOM during build at 2026-06-13T11:37:22Z run 9981' });
+check('identical signal (different timestamps/run ids) dedupes', sig2.deduplicated === true && sig2.issue === dedupIssueId && sig2.occurrences === 2, JSON.stringify(sig2));
+const sig3 = await cicd({ service: 'scratch-dedup-svc', description: 'TypeError: cannot read properties of undefined' });
+check('distinct error files a new issue', !!sig3.ingestedIssue?.identifier && sig3.ingestedIssue.identifier !== dedupIssueId, JSON.stringify(sig3).slice(0, 150));
+// closed issues do not absorb: close the first, resend, expect a NEW issue referencing it
+await call('update_issue', { identifier: dedupIssueId, status: 'Cancelled' });
+const sig4 = await cicd({ service: 'scratch-dedup-svc', description: 'Error 137: OOM during build at 2026-06-13T12:00:00Z run 777' });
+check('closed issue not silently absorbed; new issue references prior', !!sig4.ingestedIssue?.identifier && sig4.ingestedIssue.identifier !== dedupIssueId && sig4.ingestedIssue.context?.includes(dedupIssueId), JSON.stringify(sig4).slice(0, 200));
+await prisma.issue.deleteMany({ where: { title: { contains: 'scratch-dedup-svc' } } });
+
 // --- Cleanup ---
 await prisma.issue.deleteMany({ where: { identifier: { in: [scratchId, childId, parentId2].filter(Boolean) } } });
 await prisma.document.deleteMany({ where: { title: { startsWith: '[SCRATCH]' } } });

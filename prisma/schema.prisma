@@ -28,6 +28,12 @@ model Issue {
   parent      Issue?   @relation("IssueHierarchy", fields: [parentId], references: [id])
   children    Issue[]  @relation("IssueHierarchy")
 
+  // Triage dedup (Fionn M4, FLX-124): deterministic signature of
+  // webhook-born failure signals; repeats increment occurrences.
+  signature   String?
+  occurrences Int      @default(1)
+  lastSeenAt  DateTime?
+
   cycleId     String?
   cycle       Cycle?   @relation(fields: [cycleId], references: [id])
   roadmapId   String?

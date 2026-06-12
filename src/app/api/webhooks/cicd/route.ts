@@ -3,6 +3,7 @@ import { prisma } from '@/lib/prisma';
 import { revalidatePath } from 'next/cache';
 import { isAuthorized, unauthorizedResponse } from '@/lib/api-auth';
 import { createNamespacedIssue } from '@/lib/issues';
+import { computeSignature } from '@/lib/fionn/signature';
 
 export async function POST(req: Request) {
   try {
@@ -41,18 +42,53 @@ export async function POST(req: Request) {
         }
     }
 
+    // Triage dedup (Fionn M4, FLX-124): identical failure signals update
+    // the existing open issue instead of filing duplicates. A signal whose
+    // prior issue was closed files a fresh Triage issue referencing it —
+    // nothing reopens silently.
+    const signature = computeSignature(body.service, body.description);
+    const OPEN_STATUSES = ['Triage', 'Backlog', 'Todo', 'In Progress'];
+
+    const openMatch = await prisma.issue.findFirst({
+        where: { signature, status: { in: OPEN_STATUSES } },
+        orderBy: { createdAt: 'desc' }
+    });
+    if (openMatch) {
+        const updated = await prisma.issue.update({
+            where: { id: openMatch.id },
+            data: {
+                occurrences: { increment: 1 },
+                lastSeenAt: new Date(),
+            }
+        });
+        revalidatePath('/');
+        return NextResponse.json({
+            success: true,
+            deduplicated: true,
+            issue: updated.identifier,
+            occurrences: updated.occurrences
+        }, { status: 200 });
+    }
+
+    const closedMatch = await prisma.issue.findFirst({
+        where: { signature, status: { in: ['Done', 'Cancelled'] } },
+        orderBy: { createdAt: 'desc' },
+        select: { identifier: true, status: true }
+    });
+
     // Webhook-born issues land in Triage: they are unvetted signals, not
     // committed work, until a human or agent promotes them.
     const issue = await createNamespacedIssue({
         title: `[CRITICAL] Pipeline Failure: ${body.service || 'Unknown System'}`,
         description: body.description || 'DevOps Orchestrator emitted a failure event. Ensure system stability.',
-        context: `Auto-created from a CI/CD failure webhook.\n- Service: ${body.service || 'unknown'}\n- Branch: ${body.branch || 'unknown'}\n- Received: ${new Date().toISOString()}`,
+        context: `Auto-created from a CI/CD failure webhook.\n- Service: ${body.service || 'unknown'}\n- Branch: ${body.branch || 'unknown'}\n- Received: ${new Date().toISOString()}${closedMatch ? `\n- Recurrence of ${closedMatch.identifier} (${closedMatch.status}) — same failure signature; the prior fix may have regressed.` : ''}`,
         priority: 'High',
         status: 'Triage',
         cycleId: activeCycle ? activeCycle.id : null,
         repoId: repo ? repo.id : null,
         productId: repo ? repo.productId : null
     });
+    await prisma.issue.update({ where: { id: issue.id }, data: { signature, lastSeenAt: new Date() } });
 
     // Trigger Next.js cache revalidation for all UI clients looking at the dashboard
     revalidatePath('/');
