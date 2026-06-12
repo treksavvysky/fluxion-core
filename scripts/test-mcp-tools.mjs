@@ -35,8 +35,8 @@ const textOf = (r) => r?.result?.content?.[0]?.text ?? '';
 console.log('1. tools/list (HTTP surface, previously drifted to 13 tools)');
 const list = await rpc('tools/list');
 const names = (list?.result?.tools ?? []).map((t) => t.name);
-check('23 tools listed', names.length === 23, `got ${names.length}: ${names.join(', ')}`);
-for (const t of ['update_issue', 'search', 'read_product_metrics', 'archive_product', 'read_document', 'write_document', 'create_change_log', 'query_telemetry', 'read_issue', 'read_project']) {
+check('24 tools listed', names.length === 24, `got ${names.length}: ${names.join(', ')}`);
+for (const t of ['update_issue', 'search', 'read_product_metrics', 'archive_product', 'read_document', 'write_document', 'create_change_log', 'query_telemetry', 'read_issue', 'read_project', 'hydrate_issue_context']) {
   check(`${t} present`, names.includes(t));
 }
 
@@ -146,6 +146,29 @@ check('read_project returns status report + transitions', rpRes.statusReport?.to
 check('read_project includes project-scoped change logs', rpRes.changeLogs?.some((l) => l.type === 'Decision'));
 const projDoc = await call('write_document', { title: '[SCRATCH] Charter', slug: `scratch-charter-${Date.now()}`, content: 'x', docType: 'Charter' });
 check('Charter docType accepted', textOf(projDoc).includes('published'), JSON.stringify(projDoc));
+
+// --- 9. Fionn M1: Context Hydrator (FLX-121) ---
+console.log('\n9. hydrate_issue_context');
+const h1 = await call('hydrate_issue_context', { identifier: 'FLX-121' });
+const pkg = textOf(h1);
+check('package has all sections in order', ['# Context Package: FLX-121', '## Product Vision', '## Product Boundaries (scope guard)', '## Parent Objective', '## Project', '## The Issue Contract', '## Linked Repositories', '## Legal Next Statuses'].every((s, i, arr) => {
+  const idx = pkg.indexOf(s);
+  return idx >= 0 && (i === 0 || idx > pkg.indexOf(arr[i - 1]));
+}), pkg.slice(0, 200));
+check('parent objective is the FLX-102 epic', pkg.includes('FLX-102'));
+check('vision brief injected', pkg.includes('Issues are executable contracts'));
+check('boundaries scope guard injected', pkg.includes('Not a CI system'));
+check('linked repo with scope present', pkg.includes('fluxion-core') && pkg.includes('whole repo'));
+const h2 = await call('hydrate_issue_context', { identifier: 'FLX-121' });
+check('deterministic: byte-identical on repeat', textOf(h2) === pkg);
+// partial degradation: scratch issue with no parent/product docs
+const orphan = await call('create_issue', { title: '[SCRATCH] hydrator orphan', productSlug: scratchSlug ? undefined : undefined });
+const orphanId = textOf(orphan).match(/FLX-\d+/)?.[0];
+const h3 = await call('hydrate_issue_context', { identifier: orphanId });
+check('partial package degrades with markers', textOf(h3).includes('(root issue — no parent)') && !h3.error);
+const h4 = await call('hydrate_issue_context', { identifier: 'FLX-99999' });
+check('unknown issue errors', !!h4.error);
+await prisma.issue.deleteMany({ where: { identifier: orphanId ?? '' } });
 
 // --- Cleanup ---
 await prisma.issue.deleteMany({ where: { identifier: { in: [scratchId, childId, parentId2].filter(Boolean) } } });

@@ -5,6 +5,7 @@ import { multiIndexSearch } from './search';
 import { upsertDocument } from './documents';
 import { isValidProductStatus, VALID_PRODUCT_STATUSES } from './products';
 import { isValidProjectStatus, mintProjectSlug, allowedNextProjectStatuses } from './projects';
+import { hydrateIssueContext } from './fionn/hydrator';
 import { revalidatePath } from 'next/cache';
 
 // Single source of truth for the MCP tool surface. Both servers — the SSE
@@ -85,6 +86,21 @@ export const mcpTools: ToolDef[] = [
         }
       });
       return json(issues);
+    }
+  },
+  {
+    name: 'hydrate_issue_context',
+    description: 'Fionn Context Hydrator: returns one deterministic markdown Context Package for an issue — product vision, product boundaries (scope guard), parent objective, the full issue contract, linked repositories, and legal next statuses. Call this before executing a task; the package is designed to be injected directly into an agent prompt.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        issueId: { type: 'string', description: 'The UUID of the issue' },
+        identifier: { type: 'string', description: 'The human identifier (e.g. FLX-122), as an alternative to issueId' }
+      }
+    },
+    handler: async (args) => {
+      const pkg = await hydrateIssueContext(args ?? {});
+      return text(pkg);
     }
   },
   {
