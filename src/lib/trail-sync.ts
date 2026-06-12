@@ -1,7 +1,7 @@
 import { prisma } from '@/lib/prisma';
 import { Prisma } from '@prisma/client';
 import { nextIssueIdentifier } from '@/lib/identifiers';
-import { VALID_PRIORITIES, isValidStatus, assertValidTransition } from '@/lib/issues';
+import { VALID_PRIORITIES, isValidStatus, assertAllowedTransition } from '@/lib/issues';
 
 // FLX-111: Trail-Mode Protocol Delta Ingest & Offline Synchronization.
 // Reconciles transaction-logged delta batches captured offline by trail-sync-lens
@@ -210,7 +210,7 @@ async function applyDelta(
     if (delta.op === 'issue.approve') {
       const approvedStatus = asString(p.approvedStatus) ?? 'Done';
       try {
-        assertValidTransition(issue.status, approvedStatus);
+        await assertAllowedTransition(tx, issue, approvedStatus);
       } catch (e) {
         return { seq: delta.seq, op: delta.op, status: 'Rejected', resolution: e instanceof Error ? e.message : String(e) };
       }
@@ -236,7 +236,7 @@ async function applyDelta(
     const priority = asString(p.priority);
     if (status) {
       try {
-        assertValidTransition(issue.status, status);
+        await assertAllowedTransition(tx, issue, status);
       } catch (e) {
         return { seq: delta.seq, op: delta.op, status: 'Rejected', resolution: e instanceof Error ? e.message : String(e) };
       }

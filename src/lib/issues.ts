@@ -1,6 +1,7 @@
 import { prisma } from '@/lib/prisma';
 import { Prisma, PrismaClient } from '@prisma/client';
 import { nextIssueIdentifier } from '@/lib/identifiers';
+import { assertDoneGate } from '@/lib/fionn/gatekeeper';
 
 type Db = PrismaClient | Prisma.TransactionClient;
 
@@ -39,6 +40,20 @@ export function assertValidTransition(from: string, to: string): void {
   const allowed = allowedNextStatuses(from);
   if (!allowed.includes(to)) {
     throw new Error(`Illegal status transition "${from}" -> "${to}". Allowed from "${from}": ${allowed.join(', ') || '(none)'}`);
+  }
+}
+
+// Full transition check (FLX-117 graph + Fionn M3 Done gate): the single
+// entry point every surface uses for status changes. Transitioning to Done
+// additionally requires all checkbox acceptance criteria to be attested.
+export async function assertAllowedTransition(
+  db: Db,
+  issue: { id: string; identifier: string; status: string; acceptanceCriteria: string | null },
+  to: string
+): Promise<void> {
+  assertValidTransition(issue.status, to);
+  if (to === 'Done' && issue.status !== 'Done') {
+    await assertDoneGate(db, issue);
   }
 }
 

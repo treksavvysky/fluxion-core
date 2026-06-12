@@ -1,5 +1,6 @@
 import { prisma } from '@/lib/prisma';
 import { allowedNextStatuses } from '@/lib/issues';
+import { getChecklist } from '@/lib/fionn/gatekeeper';
 
 // Fionn M1 — Context Hydrator (FLX-121).
 // Deterministically assembles a single markdown Context Package for an
@@ -68,13 +69,19 @@ export async function hydrateIssueContext(ref: { issueId?: string; identifier?: 
     project ? `${project.name} (${project.slug ?? 'no slug'}) — ${project.status}` : '*(not assigned to a project)*'
   ));
 
+  const checklist = await getChecklist(prisma, issue);
+  const criteriaBlock = checklist.length > 0
+    ? checklist.map(c => `- [${c.attested ? 'x' : ' '}] ${c.text}${c.attested ? ` *(attested by ${c.attestor})*` : ''}`).join('\n') +
+      '\n\nEvery unchecked criterion must be attested with evidence via `check_criterion` before this issue can transition to Done.'
+    : issue.acceptanceCriteria?.trim() || NOT_DOCUMENTED;
+
   const contract = [
     `**${issue.identifier} — ${issue.title}**`,
     `Status: ${issue.status} · Priority: ${issue.priority}`,
     '',
     `### Description\n\n${issue.description?.trim() || NOT_DOCUMENTED}`,
     `### Context\n\n${issue.context?.trim() || NOT_DOCUMENTED}`,
-    `### Acceptance Criteria\n\n${issue.acceptanceCriteria?.trim() || NOT_DOCUMENTED}`,
+    `### Acceptance Criteria\n\n${criteriaBlock}`,
     `### Technical Intent\n\n${issue.technicalIntent?.trim() || NOT_DOCUMENTED}`,
   ].join('\n');
   parts.push(section('The Issue Contract', contract));

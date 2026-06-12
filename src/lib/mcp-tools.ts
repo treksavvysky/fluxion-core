@@ -1,5 +1,6 @@
 import { prisma } from './prisma';
-import { createNamespacedIssue, assertValidTransition, assertNoParentCycle, allowedNextStatuses, VALID_STATUSES } from './issues';
+import { createNamespacedIssue, assertAllowedTransition, assertNoParentCycle, allowedNextStatuses, VALID_STATUSES } from './issues';
+import { getChecklist, parseCriteria } from './fionn/gatekeeper';
 import { computeProductMetrics } from './metrics';
 import { multiIndexSearch } from './search';
 import { upsertDocument } from './documents';
@@ -86,6 +87,61 @@ export const mcpTools: ToolDef[] = [
         }
       });
       return json(issues);
+    }
+  },
+  {
+    name: 'check_criterion',
+    description: 'Fionn Verification Gatekeeper: attest one checkbox acceptance criterion of an issue with evidence (the command you ran, the output you observed). All checkbox criteria must be attested before the issue can transition to Done. Fluxion records the evidence; it never executes verification itself. Attestations are audit-logged and invalidated automatically if the criterion text is edited.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        issueId: { type: 'string', description: 'The UUID of the issue' },
+        identifier: { type: 'string', description: 'The human identifier (e.g. FLX-123), as an alternative to issueId' },
+        criterionIndex: { type: 'number', description: 'Zero-based index of the checkbox criterion (as listed by read_issue.checklist)' },
+        evidence: { type: 'string', description: 'Verifiable evidence: what was run/checked and what was observed' },
+        attestor: { type: 'string', description: 'Who attests (default "agent")' }
+      },
+      required: ['evidence']
+    },
+    handler: async (args) => {
+      const issue = await resolveIssue(args ?? {});
+      if (!issue) throw new Error('Issue not found: provide a valid issueId or identifier');
+      if (typeof args.criterionIndex !== 'number') throw new Error('Missing criterionIndex');
+      if (!args.evidence || typeof args.evidence !== 'string' || !args.evidence.trim()) {
+        throw new Error('Evidence is required: state what was run/checked and what was observed');
+      }
+      const criteria = parseCriteria(issue.acceptanceCriteria);
+      if (criteria.length === 0) throw new Error(`${issue.identifier} has no checkbox acceptance criteria to attest`);
+      const criterion = criteria[args.criterionIndex];
+      if (!criterion) {
+        throw new Error(`No criterion at index ${args.criterionIndex}. Checklist: ${criteria.map(c => `[${c.index}] ${c.text}`).join(' | ')}`);
+      }
+      const attestor = (typeof args.attestor === 'string' && args.attestor.trim()) || 'agent';
+
+      await prisma.criterionAttestation.upsert({
+        where: { issueId_criterionHash: { issueId: issue.id, criterionHash: criterion.hash } },
+        update: { evidence: args.evidence.trim(), attestor },
+        create: {
+          issueId: issue.id,
+          criterionHash: criterion.hash,
+          criterion: criterion.text,
+          evidence: args.evidence.trim(),
+          attestor,
+        },
+      });
+      await prisma.activityLog.create({
+        data: {
+          actor: attestor,
+          actorIcon: 'bot',
+          action: `Attested criterion [${criterion.index}] of ${issue.identifier}: "${criterion.text}" — ${args.evidence.trim().slice(0, 140)}`,
+          target: issue.identifier,
+        },
+      });
+
+      const checklist = await getChecklist(prisma, issue);
+      const open = checklist.filter(c => !c.attested);
+      revalidate('/');
+      return text(`Attested [${criterion.index}] "${criterion.text}" on ${issue.identifier}. ${open.length === 0 ? 'All criteria attested — Done transition is unlocked.' : `${open.length} criteria remain: ${open.map(c => `[${c.index}] ${c.text}`).join(' | ')}`}`);
     }
   },
   {
@@ -188,7 +244,12 @@ export const mcpTools: ToolDef[] = [
           children: { select: { identifier: true, title: true, status: true }, orderBy: { identifier: 'asc' } }
         }
       });
-      return json({ ...issue, allowedNextStatuses: allowedNextStatuses(issue!.status) });
+      const checklist = await getChecklist(prisma, issue!);
+      return json({
+        ...issue,
+        checklist: checklist.map(c => ({ index: c.index, text: c.text, attested: c.attested, attestor: c.attestor, evidence: c.evidence })),
+        allowedNextStatuses: allowedNextStatuses(issue!.status)
+      });
     }
   },
   {
@@ -206,7 +267,7 @@ export const mcpTools: ToolDef[] = [
       if (!args?.issueId || !args?.status) throw new Error('Missing args');
       const issue = await prisma.issue.findUnique({ where: { id: args.issueId } });
       if (!issue) throw new Error(`Issue not found for id: ${args.issueId}`);
-      assertValidTransition(issue.status, args.status);
+      await assertAllowedTransition(prisma, issue, args.status);
       const updated = await prisma.issue.update({
         where: { id: args.issueId },
         data: { status: args.status }
@@ -245,7 +306,7 @@ export const mcpTools: ToolDef[] = [
       if (typeof args.technicalIntent === 'string') data.technicalIntent = args.technicalIntent;
       if (typeof args.priority === 'string' && args.priority.trim()) data.priority = args.priority.trim();
       if (typeof args.status === 'string' && args.status.trim()) {
-        assertValidTransition(issue.status, args.status.trim());
+        await assertAllowedTransition(prisma, issue, args.status.trim());
         data.status = args.status.trim();
       }
       if (typeof args.parentIdentifier === 'string' && args.parentIdentifier.trim()) {

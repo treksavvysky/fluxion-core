@@ -4,7 +4,7 @@ import { prisma } from '@/lib/prisma';
 import { Prisma } from '@prisma/client';
 import { revalidatePath } from 'next/cache';
 import { redirect } from 'next/navigation';
-import { createNamespacedIssue, assertValidTransition } from '@/lib/issues';
+import { createNamespacedIssue, assertAllowedTransition } from '@/lib/issues';
 
 export async function getIssues(filter?: { productSlug?: string }) {
   return prisma.issue.findMany({
@@ -61,7 +61,7 @@ export async function createIssue(formData: FormData) {
 export async function updateIssueStatus(id: string, newStatus: string) {
   const issue = await prisma.issue.findUnique({ where: { id } });
   if (!issue) throw new Error('Issue not found');
-  assertValidTransition(issue.status, newStatus);
+  await assertAllowedTransition(prisma, issue, newStatus);
 
   await prisma.issue.update({
     where: { id },

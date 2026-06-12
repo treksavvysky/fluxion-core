@@ -35,8 +35,8 @@ const textOf = (r) => r?.result?.content?.[0]?.text ?? '';
 console.log('1. tools/list (HTTP surface, previously drifted to 13 tools)');
 const list = await rpc('tools/list');
 const names = (list?.result?.tools ?? []).map((t) => t.name);
-check('25 tools listed', names.length === 25, `got ${names.length}: ${names.join(', ')}`);
-for (const t of ['update_issue', 'search', 'read_product_metrics', 'archive_product', 'read_document', 'write_document', 'create_change_log', 'query_telemetry', 'read_issue', 'read_project', 'hydrate_issue_context', 'decompose_issue']) {
+check('26 tools listed', names.length === 26, `got ${names.length}: ${names.join(', ')}`);
+for (const t of ['update_issue', 'search', 'read_product_metrics', 'archive_product', 'read_document', 'write_document', 'create_change_log', 'query_telemetry', 'read_issue', 'read_project', 'hydrate_issue_context', 'decompose_issue', 'check_criterion']) {
   check(`${t} present`, names.includes(t));
 }
 
@@ -206,6 +206,37 @@ check('deep cycle rejected with chain in error', !!cyc.error && cyc.error.messag
 const selfCyc = await call('update_issue', { identifier: epicId, parentIdentifier: epicId });
 check('self-parent still rejected', !!selfCyc.error);
 await prisma.issue.deleteMany({ where: { title: { startsWith: '[SCRATCH] dec' } } });
+
+// --- 11. Fionn M3: Verification Gatekeeper (FLX-123) ---
+console.log('\n11. check_criterion + Done gate');
+const gated = await call('create_issue', {
+  title: '[SCRATCH] gated issue',
+  status: 'In Progress',
+  acceptanceCriteria: '- [ ] tests pass\n- [ ] zero type errors\nProse note that is not a checkbox.',
+});
+const gatedId = textOf(gated).match(/FLX-\d+/)?.[0];
+const blocked = await call('update_issue', { identifier: gatedId, status: 'Done' });
+check('Done blocked with open criteria listed', !!blocked.error && blocked.error.message.includes('unattested') && blocked.error.message.includes('tests pass'), JSON.stringify(blocked.error ?? blocked));
+const att0 = await call('check_criterion', { identifier: gatedId, criterionIndex: 0, evidence: 'ran suite: ALL CHECKS PASSED', attestor: 'suite' });
+check('first attestation recorded, one remains', textOf(att0).includes('1 criteria remain'), textOf(att0));
+const stillBlocked = await call('update_issue', { identifier: gatedId, status: 'Done' });
+check('Done still blocked with one open', !!stillBlocked.error && stillBlocked.error.message.includes('zero type errors'));
+const att1 = await call('check_criterion', { identifier: gatedId, criterionIndex: 1, evidence: 'tsc --noEmit clean', attestor: 'suite' });
+check('final attestation unlocks Done', textOf(att1).includes('Done transition is unlocked'), textOf(att1));
+const rGated = JSON.parse(textOf(await call('read_issue', { identifier: gatedId })));
+check('read_issue exposes checklist with attestations', rGated.checklist?.length === 2 && rGated.checklist.every((c) => c.attested));
+const nowDone = await call('update_issue', { identifier: gatedId, status: 'Done' });
+check('Done allowed after full attestation', textOf(nowDone).includes('status'), JSON.stringify(nowDone));
+// editing a criterion invalidates its attestation
+await call('update_issue', { identifier: gatedId, status: 'In Progress' });
+await call('update_issue', { identifier: gatedId, acceptanceCriteria: '- [ ] tests pass\n- [ ] zero LINT errors' });
+const reBlocked = await call('update_issue', { identifier: gatedId, status: 'Done' });
+check('edited criterion invalidates stale attestation', !!reBlocked.error && reBlocked.error.message.includes('zero LINT errors'), JSON.stringify(reBlocked.error ?? reBlocked));
+const noBox = await call('check_criterion', { identifier: scratchId, criterionIndex: 0, evidence: 'x' });
+check('issues without checkboxes have no checklist to attest', !!noBox.error);
+const hGated = await call('hydrate_issue_context', { identifier: gatedId });
+check('hydrator annotates checklist state', textOf(hGated).includes('- [x] tests pass') && textOf(hGated).includes('- [ ] zero LINT errors'));
+await prisma.issue.deleteMany({ where: { identifier: gatedId ?? '' } });
 
 // --- Cleanup ---
 await prisma.issue.deleteMany({ where: { identifier: { in: [scratchId, childId, parentId2].filter(Boolean) } } });
