@@ -35,8 +35,8 @@ const textOf = (r) => r?.result?.content?.[0]?.text ?? '';
 console.log('1. tools/list (HTTP surface, previously drifted to 13 tools)');
 const list = await rpc('tools/list');
 const names = (list?.result?.tools ?? []).map((t) => t.name);
-check('24 tools listed', names.length === 24, `got ${names.length}: ${names.join(', ')}`);
-for (const t of ['update_issue', 'search', 'read_product_metrics', 'archive_product', 'read_document', 'write_document', 'create_change_log', 'query_telemetry', 'read_issue', 'read_project', 'hydrate_issue_context']) {
+check('25 tools listed', names.length === 25, `got ${names.length}: ${names.join(', ')}`);
+for (const t of ['update_issue', 'search', 'read_product_metrics', 'archive_product', 'read_document', 'write_document', 'create_change_log', 'query_telemetry', 'read_issue', 'read_project', 'hydrate_issue_context', 'decompose_issue']) {
   check(`${t} present`, names.includes(t));
 }
 
@@ -169,6 +169,43 @@ check('partial package degrades with markers', textOf(h3).includes('(root issue 
 const h4 = await call('hydrate_issue_context', { identifier: 'FLX-99999' });
 check('unknown issue errors', !!h4.error);
 await prisma.issue.deleteMany({ where: { identifier: orphanId ?? '' } });
+
+// --- 10. Fionn M2: Goal Tree Integrity (FLX-122) ---
+console.log('\n10. decompose_issue + cycle guard');
+const epicRes = await call('create_issue', { title: '[SCRATCH] decompose epic', productSlug: 'FLX' });
+const epicId = textOf(epicRes).match(/FLX-\d+/)?.[0];
+const dec = await call('decompose_issue', {
+  parentIdentifier: epicId,
+  children: [
+    { title: '[SCRATCH] dec child 1', acceptanceCriteria: '- a' },
+    { title: '[SCRATCH] dec child 2', priority: 'High' },
+    { title: '[SCRATCH] dec child 3' },
+  ],
+});
+const decIds = textOf(dec).match(/FLX-\d+/g)?.slice(1) ?? [];
+check('decomposes into 3 children atomically', decIds.length === 3, textOf(dec));
+const epicFull = JSON.parse(textOf(await call('read_issue', { identifier: epicId })));
+check('children linked under parent', epicFull.children.length === 3);
+check('children inherit product namespace', decIds.every((i) => i.startsWith('FLX-')));
+
+// atomic rollback: second child invalid -> nothing created
+const before = await prisma.issue.count({ where: { title: { startsWith: '[SCRATCH] rollback' } } });
+const bad = await call('decompose_issue', {
+  parentIdentifier: epicId,
+  children: [{ title: '[SCRATCH] rollback 1' }, { title: '[SCRATCH] rollback 2', status: 'Banana' }],
+});
+const after = await prisma.issue.count({ where: { title: { startsWith: '[SCRATCH] rollback' } } });
+check('invalid child rejects the whole batch', !!bad.error, JSON.stringify(bad.error ?? bad));
+check('rollback leaves no partial children', before === after, `before ${before}, after ${after}`);
+
+// cycle guard: epic -> child1 exists; making epic a child of its grandchild must fail
+const grand = await call('decompose_issue', { parentIdentifier: decIds[0], children: [{ title: '[SCRATCH] dec grandchild' }] });
+const grandId = textOf(grand).match(/FLX-\d+/g)?.slice(1)?.[0];
+const cyc = await call('update_issue', { identifier: epicId, parentIdentifier: grandId });
+check('deep cycle rejected with chain in error', !!cyc.error && cyc.error.message.includes('cycle'), JSON.stringify(cyc.error ?? cyc));
+const selfCyc = await call('update_issue', { identifier: epicId, parentIdentifier: epicId });
+check('self-parent still rejected', !!selfCyc.error);
+await prisma.issue.deleteMany({ where: { title: { startsWith: '[SCRATCH] dec' } } });
 
 // --- Cleanup ---
 await prisma.issue.deleteMany({ where: { identifier: { in: [scratchId, childId, parentId2].filter(Boolean) } } });

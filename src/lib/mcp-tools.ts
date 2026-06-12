@@ -1,5 +1,5 @@
 import { prisma } from './prisma';
-import { createNamespacedIssue, assertValidTransition, allowedNextStatuses, VALID_STATUSES } from './issues';
+import { createNamespacedIssue, assertValidTransition, assertNoParentCycle, allowedNextStatuses, VALID_STATUSES } from './issues';
 import { computeProductMetrics } from './metrics';
 import { multiIndexSearch } from './search';
 import { upsertDocument } from './documents';
@@ -86,6 +86,66 @@ export const mcpTools: ToolDef[] = [
         }
       });
       return json(issues);
+    }
+  },
+  {
+    name: 'decompose_issue',
+    description: 'Fionn Goal Tree: atomically decompose a parent issue into child issues in one validated transaction (all-or-nothing). Children inherit the parent\'s product namespace and project by default. Agents declare their decomposition explicitly here instead of creating disconnected flat backlogs.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        parentIdentifier: { type: 'string', description: 'Identifier of the parent issue (e.g. FLX-102)' },
+        children: {
+          type: 'array',
+          description: 'The child issues to create (1-20)',
+          items: {
+            type: 'object',
+            properties: {
+              title: { type: 'string', description: 'Child issue title' },
+              description: { type: 'string', description: 'Child description' },
+              context: { type: 'string', description: 'Agent contract: context' },
+              acceptanceCriteria: { type: 'string', description: 'Agent contract: verifiable Done conditions' },
+              technicalIntent: { type: 'string', description: 'Agent contract: approach/constraints' },
+              priority: { type: 'string', description: 'Low, Medium, High, Critical (default Medium)' },
+              status: { type: 'string', description: 'Initial status (default Todo)' }
+            },
+            required: ['title']
+          }
+        }
+      },
+      required: ['parentIdentifier', 'children']
+    },
+    handler: async (args) => {
+      if (!args?.parentIdentifier) throw new Error('Missing parentIdentifier');
+      if (!Array.isArray(args.children) || args.children.length === 0) throw new Error('children must be a non-empty array');
+      if (args.children.length > 20) throw new Error('Decompose into at most 20 children per call');
+      for (const [i, c] of args.children.entries()) {
+        if (!c?.title || typeof c.title !== 'string') throw new Error(`children[${i}] is missing a title`);
+      }
+      const parent = await prisma.issue.findUnique({ where: { identifier: args.parentIdentifier.toUpperCase().trim() } });
+      if (!parent) throw new Error(`Parent issue not found for identifier: ${args.parentIdentifier}`);
+
+      const created = await prisma.$transaction(async (tx) => {
+        const out = [];
+        for (const c of args.children) {
+          out.push(await createNamespacedIssue({
+            title: c.title,
+            description: c.description,
+            context: c.context,
+            acceptanceCriteria: c.acceptanceCriteria,
+            technicalIntent: c.technicalIntent,
+            priority: c.priority,
+            status: c.status,
+            parentId: parent.id,
+            productId: parent.productId,
+            projectId: parent.projectId,
+          }, tx));
+        }
+        return out;
+      });
+
+      revalidate('/');
+      return text(`Decomposed ${parent.identifier} into ${created.length} children: ${created.map(c => c.identifier).join(', ')}`);
     }
   },
   {
@@ -195,7 +255,7 @@ export const mcpTools: ToolDef[] = [
         } else {
           const parent = await prisma.issue.findUnique({ where: { identifier: ref.toUpperCase() } });
           if (!parent) throw new Error(`Parent issue not found for identifier: ${ref}`);
-          if (parent.id === issue.id) throw new Error('An issue cannot be its own parent');
+          await assertNoParentCycle(prisma, issue.id, parent.id);
           data.parentId = parent.id;
         }
       }

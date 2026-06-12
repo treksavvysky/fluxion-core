@@ -1,5 +1,8 @@
 import { prisma } from '@/lib/prisma';
+import { Prisma, PrismaClient } from '@prisma/client';
 import { nextIssueIdentifier } from '@/lib/identifiers';
+
+type Db = PrismaClient | Prisma.TransactionClient;
 
 export const WORKSPACE_SLUG = 'FLX';
 
@@ -39,6 +42,28 @@ export function assertValidTransition(from: string, to: string): void {
   }
 }
 
+// Goal-tree integrity (Fionn M2, FLX-122): reject parent assignments that
+// would create a cycle. Walks ancestors from the proposed parent; if the
+// issue itself appears in that chain, the assignment is illegal. Depth cap
+// is a backstop against pathological trees.
+export async function assertNoParentCycle(db: Db, issueId: string, newParentId: string): Promise<void> {
+  if (issueId === newParentId) throw new Error('An issue cannot be its own parent');
+  const chain: string[] = [];
+  let cursor: string | null = newParentId;
+  for (let depth = 0; depth < 50 && cursor; depth++) {
+    const node: { id: string; identifier: string; parentId: string | null } | null = await db.issue.findUnique({
+      where: { id: cursor },
+      select: { id: true, identifier: true, parentId: true },
+    });
+    if (!node) break;
+    chain.push(node.identifier);
+    if (node.id === issueId) {
+      throw new Error(`Illegal parent assignment: would create a cycle (${chain.reverse().join(' -> ')} -> ${chain[chain.length - 1]})`);
+    }
+    cursor = node.parentId;
+  }
+}
+
 export interface CreateIssueInput {
   title: string;
   description?: string | null;
@@ -61,8 +86,9 @@ export interface CreateIssueInput {
 // and the webhooks, so every surface mints product-namespaced identifiers
 // and honors the issue protocol the same way. Issues with no product land
 // in the FLX workspace product (when it exists), keeping dashboard counts
-// in agreement with identifier prefixes.
-export async function createNamespacedIssue(input: CreateIssueInput) {
+// in agreement with identifier prefixes. Pass a transaction client as `db`
+// for atomic multi-issue operations (decompose_issue).
+export async function createNamespacedIssue(input: CreateIssueInput, db: Db = prisma) {
   const status = input.status || 'Todo';
   if (!isValidStatus(status)) {
     throw new Error(`Invalid initial status "${status}". Valid statuses: ${VALID_STATUSES.join(', ')}`);
@@ -70,30 +96,30 @@ export async function createNamespacedIssue(input: CreateIssueInput) {
 
   let product = null;
   if (input.productId) {
-    product = await prisma.product.findUnique({ where: { id: input.productId } });
+    product = await db.product.findUnique({ where: { id: input.productId } });
     if (!product) throw new Error(`Product not found for id: ${input.productId}`);
   } else if (input.productSlug) {
-    product = await prisma.product.findUnique({ where: { slug: input.productSlug.toUpperCase().trim() } });
+    product = await db.product.findUnique({ where: { slug: input.productSlug.toUpperCase().trim() } });
     if (!product) throw new Error(`Product not found for slug: ${input.productSlug}`);
   } else {
-    product = await prisma.product.findUnique({ where: { slug: WORKSPACE_SLUG } });
+    product = await db.product.findUnique({ where: { slug: WORKSPACE_SLUG } });
   }
 
   let parentId: string | null = null;
   if (input.parentId) {
-    const parent = await prisma.issue.findUnique({ where: { id: input.parentId } });
+    const parent = await db.issue.findUnique({ where: { id: input.parentId } });
     if (!parent) throw new Error(`Parent issue not found for id: ${input.parentId}`);
     parentId = parent.id;
   } else if (input.parentIdentifier) {
-    const parent = await prisma.issue.findUnique({ where: { identifier: input.parentIdentifier.toUpperCase().trim() } });
+    const parent = await db.issue.findUnique({ where: { identifier: input.parentIdentifier.toUpperCase().trim() } });
     if (!parent) throw new Error(`Parent issue not found for identifier: ${input.parentIdentifier}`);
     parentId = parent.id;
   }
 
   const slug = product?.slug ?? WORKSPACE_SLUG;
-  const identifier = await nextIssueIdentifier(prisma, slug, slug === WORKSPACE_SLUG ? 100 : 0);
+  const identifier = await nextIssueIdentifier(db, slug, slug === WORKSPACE_SLUG ? 100 : 0);
 
-  return prisma.issue.create({
+  return db.issue.create({
     data: {
       identifier,
       title: input.title,
