@@ -3,6 +3,7 @@ import { createNamespacedIssue, assertValidTransition, allowedNextStatuses, VALI
 import { computeProductMetrics } from './metrics';
 import { multiIndexSearch } from './search';
 import { upsertDocument } from './documents';
+import { isValidProductStatus, VALID_PRODUCT_STATUSES } from './products';
 import { revalidatePath } from 'next/cache';
 
 // Single source of truth for the MCP tool surface. Both servers — the SSE
@@ -322,17 +323,22 @@ export const mcpTools: ToolDef[] = [
   },
   {
     name: 'create_product',
-    description: 'Create a new product inside the Fluxion Core database.',
+    description: 'Create a new product inside the Fluxion Core database. Lifecycle statuses: Concept, Active, Maintenance, Sunset, Archived (default Active; use Concept for ideas not yet in development).',
     inputSchema: {
       type: 'object',
       properties: {
         name: { type: 'string', description: 'The name of the product' },
-        description: { type: 'string', description: 'Detailed description of the product' }
+        description: { type: 'string', description: 'Detailed description of the product' },
+        status: { type: 'string', description: 'Initial lifecycle status (default Active; Concept for pre-development ideas)' }
       },
       required: ['name']
     },
     handler: async (args) => {
       if (!args?.name) throw new Error('Missing name');
+      const status = args.status || 'Active';
+      if (!isValidProductStatus(status)) {
+        throw new Error(`Invalid product status "${status}". Valid statuses: ${VALID_PRODUCT_STATUSES.join(', ')}`);
+      }
 
       let slugBase = args.name.toUpperCase().replace(/[^A-Z0-9]+/g, '-').replace(/(^-|-$)+/g, '');
       if (slugBase.length > 10) slugBase = slugBase.substring(0, 10);
@@ -349,11 +355,11 @@ export const mcpTools: ToolDef[] = [
           name: args.name,
           slug,
           description: args.description || null,
-          status: 'Active'
+          status
         }
       });
-      revalidate('/');
-      return text(`Successfully created product ${p.name} with slug ${p.slug}`);
+      revalidate('/', '/products');
+      return text(`Successfully created product ${p.name} with slug ${p.slug} (${p.status})`);
     }
   },
   {
