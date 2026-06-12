@@ -42,10 +42,10 @@ export default async function ProductsPage({ searchParams }: { searchParams: Pro
           <div className={styles.titleGroup}>
             <h1 className={styles.title}>
               <Package size={24} style={{ color: 'var(--accent)', marginRight: '8px' }} />
-              Product Containers
+              Product Portfolio
             </h1>
             <span className={styles.badge}>
-              Clean domain namespacing (slugs) and data isolation layers for Projects and Issues.
+              Overview of every product tracked by Fluxion Core — namespaced domains with isolated projects, issues, and metrics. Click a product to manage it.
             </span>
           </div>
           <div className={styles.actions}>
@@ -63,7 +63,7 @@ export default async function ProductsPage({ searchParams }: { searchParams: Pro
             <div>Product Name</div>
             <div style={{ textAlign: 'center' }}>Status</div>
             <div>Scope Description</div>
-            <div>Deliverables</div>
+            <div>Linked Assets</div>
             <div>Defects (O/C)</div>
             <div>Tech Debt</div>
             <div>Roadmap %</div>
@@ -81,10 +81,14 @@ export default async function ProductsPage({ searchParams }: { searchParams: Pro
               return (
                 <div key={p.id} className={styles.productRow}>
                   <div>
-                    <span className={styles.slugCell}>{p.slug}</span>
+                    <Link href={`/products/${p.slug}`} style={{ textDecoration: 'none' }}>
+                      <span className={styles.slugCell}>{p.slug}</span>
+                    </Link>
                   </div>
                   <div className={styles.nameCell}>
-                    {p.name}
+                    <Link href={`/products/${p.slug}`} style={{ textDecoration: 'none', color: 'inherit' }}>
+                      {p.name}
+                    </Link>
                   </div>
                   <div>
                     <span className={`${styles.statusPill} ${p.status === 'Archived' ? styles.statusArchived : styles.statusActive}`}>
@@ -95,7 +99,7 @@ export default async function ProductsPage({ searchParams }: { searchParams: Pro
                     {p.description || 'No domain description provided.'}
                   </div>
                   <div className={styles.assetsCell}>
-                    {p._count.repos} repos • {p._count.projects} projects
+                    {p._count.repos} repo{p._count.repos === 1 ? '' : 's'} • {p._count.projects} project{p._count.projects === 1 ? '' : 's'}
                   </div>
                   <div>
                     <span className={styles.defectsBadge}>

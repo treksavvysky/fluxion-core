@@ -132,6 +132,11 @@
   font-size: 13px;
   color: var(--text-muted);
   line-height: 1.4;
+  /* One-line clamp: full prose lives on the product detail page */
+  display: -webkit-box;
+  -webkit-line-clamp: 1;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
 }
 
 .assetsCell {

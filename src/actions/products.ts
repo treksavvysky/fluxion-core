@@ -3,6 +3,7 @@
 import { prisma } from '@/lib/prisma';
 import { revalidatePath } from 'next/cache';
 import { computeProductMetrics } from '@/lib/metrics';
+import { assertValidProductTransition } from '@/lib/products';
 
 export async function getProducts() {
   return prisma.product.findMany({
@@ -78,34 +79,45 @@ export async function updateProduct(id: string, data: { name: string; descriptio
 }
 
 export async function archiveProduct(id: string) {
-  const existing = await prisma.product.findUnique({ where: { id } });
-  if (!existing) {
-    throw new Error('Product not found');
-  }
-
-  // Toggle soft-delete status to Archived
-  const product = await prisma.product.update({
-    where: { id },
-    data: { status: 'Archived' }
-  });
-
-  revalidatePath('/products');
-  return product;
+  return updateProductLifecycle(id, 'Archived');
 }
 
 export async function unarchiveProduct(id: string) {
+  return updateProductLifecycle(id, 'Active');
+}
+
+// Lifecycle transitions (FLX-120): Concept/Active/Maintenance/Sunset/Archived,
+// validated against the shared transition graph in src/lib/products.ts.
+export async function updateProductLifecycle(id: string, status: string) {
   const existing = await prisma.product.findUnique({ where: { id } });
   if (!existing) {
     throw new Error('Product not found');
   }
+  assertValidProductTransition(existing.status, status);
 
   const product = await prisma.product.update({
     where: { id },
-    data: { status: 'Active' }
+    data: { status }
   });
 
   revalidatePath('/products');
+  revalidatePath(`/products/${product.slug}`);
   return product;
+}
+
+export async function getProductBySlug(slug: string) {
+  return prisma.product.findUnique({
+    where: { slug: slug.toUpperCase().trim() },
+    include: {
+      projects: { orderBy: { createdAt: 'desc' } },
+      roadmaps: { include: { issues: { select: { status: true } } }, orderBy: { createdAt: 'desc' } },
+      issues: { orderBy: { createdAt: 'desc' }, select: { id: true, identifier: true, title: true, status: true, priority: true } },
+      documents: { select: { slug: true, title: true, docType: true, updatedAt: true }, orderBy: { updatedAt: 'desc' } },
+      changeLogs: { orderBy: { createdAt: 'desc' }, take: 8 },
+      repositories: { include: { repository: true } },
+      _count: { select: { projects: true, repos: true, issues: true } }
+    }
+  });
 }
 
 export async function getProductMetrics(productId: string) {

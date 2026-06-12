@@ -188,6 +188,7 @@ model Document {
   slug        String   @unique
   content     String   // Markdown article content
   category    String   @default("General") // Architecture, Schema, API, Guide, General
+  docType     String   @default("General") // Vision, Boundaries, Architecture, General — durable-doc slots per product (FLX-120)
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
@@ -197,6 +198,20 @@ model Document {
   repo        Repository? @relation(fields: [repoId], references: [id])
   projectId   String?
   project     Project?    @relation(fields: [projectId], references: [id])
+  revisions   DocumentRevision[]
+}
+
+// Snapshot of a document's prior state, written on every upsert-update
+// (FLX-120). Keeps the durable strategic docs auditable without a CMS.
+model DocumentRevision {
+  id         String   @id @default(cuid())
+  documentId String
+  document   Document @relation(fields: [documentId], references: [id], onDelete: Cascade)
+  title      String
+  content    String
+  category   String
+  docType    String
+  createdAt  DateTime @default(now())
 }
 
 model AutomationRule {

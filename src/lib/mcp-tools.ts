@@ -2,6 +2,7 @@ import { prisma } from './prisma';
 import { createNamespacedIssue, assertValidTransition, allowedNextStatuses, VALID_STATUSES } from './issues';
 import { computeProductMetrics } from './metrics';
 import { multiIndexSearch } from './search';
+import { upsertDocument } from './documents';
 import { revalidatePath } from 'next/cache';
 
 // Single source of truth for the MCP tool surface. Both servers — the SSE
@@ -520,13 +521,15 @@ export const mcpTools: ToolDef[] = [
   },
   {
     name: 'write_document',
-    description: 'Create or update a technical document or architecture wiki article in the Documentation Hub.',
+    description: 'Create or update a technical document in the Documentation Hub. Upserts by slug: writing to an existing slug updates the document and snapshots its prior state into revision history. docType marks the durable product-doc slots (Vision, Boundaries, Architecture); keep those concise — scope-guard briefs, not theses. Full documentation belongs in the linked repository.',
     inputSchema: {
       type: 'object',
       properties: {
         title: { type: 'string', description: 'The title of the document' },
         content: { type: 'string', description: 'Markdown formatted content of the document' },
+        slug: { type: 'string', description: 'Optional explicit slug; defaults to a slugified title. Writing to an existing slug updates that document (with a revision snapshot).' },
         category: { type: 'string', description: 'Category (Architecture, Schema, API, Guides, General)' },
+        docType: { type: 'string', description: 'Durable-doc slot: Vision, Boundaries, Architecture, or General (default)' },
         productId: { type: 'string', description: 'Optional UUID of the associated Product' },
         repoId: { type: 'string', description: 'Optional UUID of the associated Repository' },
         projectId: { type: 'string', description: 'Optional UUID of the associated Project' }
@@ -534,27 +537,18 @@ export const mcpTools: ToolDef[] = [
       required: ['title', 'content']
     },
     handler: async (args) => {
-      if (!args?.title || !args?.content) throw new Error('Missing title or content');
-
-      let slug = args.title.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)+/g, '');
-      const existing = await prisma.document.findUnique({ where: { slug } });
-      if (existing) {
-        slug = `${slug}-${Math.floor(Math.random() * 1000)}`;
-      }
-
-      const doc = await prisma.document.create({
-        data: {
-          title: args.title,
-          slug,
-          content: args.content,
-          category: args.category || 'General',
-          productId: args.productId || null,
-          repoId: args.repoId || null,
-          projectId: args.projectId || null
-        }
+      const { document: doc, created } = await upsertDocument({
+        title: args?.title,
+        content: args?.content,
+        slug: args?.slug,
+        category: args?.category,
+        docType: args?.docType,
+        productId: args?.productId,
+        repoId: args?.repoId,
+        projectId: args?.projectId
       });
       revalidate('/docs');
-      return text(`Successfully published document ${doc.title} at slug: ${doc.slug}`);
+      return text(`Successfully ${created ? 'published' : 'updated'} document ${doc.title} at slug: ${doc.slug}${created ? '' : ' (previous version saved to revision history)'}`);
     }
   },
   {

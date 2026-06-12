@@ -117,8 +117,22 @@ check('legal transition Triage->In Progress applied', textOf(goodTransition).inc
 const detach = await call('update_issue', { identifier: childId, parentIdentifier: 'none' });
 check('child detached via parentIdentifier none', textOf(detach).includes('parentId'), JSON.stringify(detach));
 
+// --- 7. Document upsert + revision history (FLX-120) ---
+console.log('\n7. write_document upsert + revisions');
+const docSlug = `scratch-upsert-doc-${Date.now()}`;
+const w1 = await call('write_document', { title: '[SCRATCH] Upsert Doc', slug: docSlug, content: 'v1 content', docType: 'Vision' });
+check('first write publishes', textOf(w1).includes('published'), textOf(w1));
+const w2 = await call('write_document', { title: '[SCRATCH] Upsert Doc v2', slug: docSlug, content: 'v2 content', docType: 'Vision' });
+check('second write updates (no duplicate)', textOf(w2).includes('updated') && textOf(w2).includes('revision history'), textOf(w2));
+const docRow = await prisma.document.findUnique({ where: { slug: docSlug }, include: { revisions: true } });
+check('content updated in place', docRow?.content === 'v2 content' && docRow?.title === '[SCRATCH] Upsert Doc v2');
+check('prior version snapshotted to revision', docRow?.revisions.length === 1 && docRow?.revisions[0].content === 'v1 content');
+const wBad = await call('write_document', { title: '[SCRATCH] bad type', content: 'x', docType: 'Thesis' });
+check('invalid docType rejected', !!wBad.error, JSON.stringify(wBad.error ?? wBad));
+
 // --- Cleanup ---
 await prisma.issue.deleteMany({ where: { identifier: { in: [scratchId, childId, parentId2].filter(Boolean) } } });
+await prisma.document.deleteMany({ where: { slug: docSlug } });
 if (scratchSlug) await prisma.product.delete({ where: { slug: scratchSlug } });
 console.log('\nScratch entities cleaned up.');
 
