@@ -1,6 +1,12 @@
 import { prisma } from '@/lib/prisma';
 
-export const VALID_DOC_TYPES = ['Vision', 'Boundaries', 'Architecture', 'General'] as const;
+export const VALID_DOC_TYPES = [
+  // Product durable docs (FLX-120)
+  'Vision', 'Boundaries', 'Architecture',
+  // Project durable docs (FLX-125)
+  'Charter', 'Design', 'Risk', 'Retrospective',
+  'General',
+] as const;
 
 export function slugifyTitle(title: string): string {
   return title.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)+/g, '');

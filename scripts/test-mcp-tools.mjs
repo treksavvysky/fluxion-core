@@ -35,8 +35,8 @@ const textOf = (r) => r?.result?.content?.[0]?.text ?? '';
 console.log('1. tools/list (HTTP surface, previously drifted to 13 tools)');
 const list = await rpc('tools/list');
 const names = (list?.result?.tools ?? []).map((t) => t.name);
-check('22 tools listed', names.length === 22, `got ${names.length}: ${names.join(', ')}`);
-for (const t of ['update_issue', 'search', 'read_product_metrics', 'archive_product', 'read_document', 'write_document', 'create_change_log', 'query_telemetry', 'read_issue']) {
+check('23 tools listed', names.length === 23, `got ${names.length}: ${names.join(', ')}`);
+for (const t of ['update_issue', 'search', 'read_product_metrics', 'archive_product', 'read_document', 'write_document', 'create_change_log', 'query_telemetry', 'read_issue', 'read_project']) {
   check(`${t} present`, names.includes(t));
 }
 
@@ -130,9 +130,28 @@ check('prior version snapshotted to revision', docRow?.revisions.length === 1 &&
 const wBad = await call('write_document', { title: '[SCRATCH] bad type', content: 'x', docType: 'Thesis' });
 check('invalid docType rejected', !!wBad.error, JSON.stringify(wBad.error ?? wBad));
 
+// --- 8. Project protocol: slug, lifecycle, read_project, decision logs (FLX-125) ---
+console.log('\n8. Project protocol');
+const cp2 = await call('create_project', { name: '[SCRATCH] Project Protocol Test', status: 'Active' });
+const projSlug = textOf(cp2).match(/slug ([a-z0-9-]+)/)?.[1];
+check('create_project mints slug + accepts status', !!projSlug && textOf(cp2).includes('Active'), textOf(cp2));
+const badStatus = await call('create_project', { name: '[SCRATCH] bad', status: 'Zombie' });
+check('invalid project status rejected', !!badStatus.error);
+const projRow = await prisma.project.findUnique({ where: { slug: projSlug } });
+const dl = await call('create_change_log', { type: 'Decision', description: '[SCRATCH] chose option A', reason: 'testing', approvedBy: 'suite', implementedBy: 'suite', projectId: projRow.id });
+check('decision log scopes to project', textOf(dl).includes('Decision'), textOf(dl));
+const rp = await call('read_project', { slug: projSlug });
+const rpRes = JSON.parse(textOf(rp));
+check('read_project returns status report + transitions', rpRes.statusReport?.totalIssues === 0 && Array.isArray(rpRes.allowedNextStatuses) && rpRes.allowedNextStatuses.includes('On Hold'));
+check('read_project includes project-scoped change logs', rpRes.changeLogs?.some((l) => l.type === 'Decision'));
+const projDoc = await call('write_document', { title: '[SCRATCH] Charter', slug: `scratch-charter-${Date.now()}`, content: 'x', docType: 'Charter' });
+check('Charter docType accepted', textOf(projDoc).includes('published'), JSON.stringify(projDoc));
+
 // --- Cleanup ---
 await prisma.issue.deleteMany({ where: { identifier: { in: [scratchId, childId, parentId2].filter(Boolean) } } });
-await prisma.document.deleteMany({ where: { slug: docSlug } });
+await prisma.document.deleteMany({ where: { title: { startsWith: '[SCRATCH]' } } });
+await prisma.changeLog.deleteMany({ where: { description: { startsWith: '[SCRATCH]' } } });
+await prisma.project.deleteMany({ where: { name: { startsWith: '[SCRATCH]' } } });
 if (scratchSlug) await prisma.product.delete({ where: { slug: scratchSlug } });
 console.log('\nScratch entities cleaned up.');
 

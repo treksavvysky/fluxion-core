@@ -68,7 +68,7 @@ async function toolWorks(client, tool) {
 console.log('1. Single session baseline');
 const a = await connect('session-a');
 const tools = await a.listTools();
-check('client A lists 22 tools', tools.tools.length === 22, `got ${tools.tools.length}`);
+check('client A lists 23 tools', tools.tools.length === 23, `got ${tools.tools.length}`);
 check('client A can call read_products', await toolWorks(a, 'read_products'));
 
 console.log('\n2. Concurrent second session');

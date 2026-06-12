@@ -118,9 +118,10 @@ model ProductRepository {
 
 model Project {
   id          String    @id @default(cuid())
+  slug        String?   @unique // minted from name at creation, immutable; nullable only for pre-FLX-125 rows
   name        String
   description String?
-  status      String    @default("Planned") // Planned, Active, Completed, Cancelled
+  status      String    @default("Planned") // Planned, Active, On Hold, Completed, Cancelled — transitions enforced in src/lib/projects.ts
   startDate   DateTime?
   endDate     DateTime?
   createdAt   DateTime  @default(now())
@@ -130,6 +131,7 @@ model Project {
   product     Product?  @relation(fields: [productId], references: [id])
   issues      Issue[]
   documents   Document[]
+  changeLogs  ChangeLog[]
 }
 
 model Build {
@@ -180,6 +182,8 @@ model ChangeLog {
   repo          Repository? @relation(fields: [repoId], references: [id])
   productId     String?
   product       Product?    @relation(fields: [productId], references: [id])
+  projectId     String?
+  project       Project?    @relation(fields: [projectId], references: [id])
 }
 
 model Document {

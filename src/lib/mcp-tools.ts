@@ -4,6 +4,7 @@ import { computeProductMetrics } from './metrics';
 import { multiIndexSearch } from './search';
 import { upsertDocument } from './documents';
 import { isValidProductStatus, VALID_PRODUCT_STATUSES } from './products';
+import { isValidProjectStatus, mintProjectSlug, allowedNextProjectStatuses } from './projects';
 import { revalidatePath } from 'next/cache';
 
 // Single source of truth for the MCP tool surface. Both servers — the SSE
@@ -403,29 +404,75 @@ export const mcpTools: ToolDef[] = [
   },
   {
     name: 'create_project',
-    description: 'Create a new project (temporal milestone) inside the Fluxion Core database.',
+    description: 'Create a new project (fixed-term execution container under a product) inside the Fluxion Core database. Lifecycle statuses: Planned, Active, On Hold, Completed, Cancelled.',
     inputSchema: {
       type: 'object',
       properties: {
         name: { type: 'string', description: 'The name of the project' },
         description: { type: 'string', description: 'Detailed description of the project' },
         productId: { type: 'string', description: 'Optional UUID of the product this project belongs to' },
-        status: { type: 'string', description: 'Initial status (Planned, Active, Completed, Cancelled)' }
+        status: { type: 'string', description: 'Initial status (default Planned)' }
       },
       required: ['name']
     },
     handler: async (args) => {
       if (!args?.name) throw new Error('Missing name');
+      const status = args.status || 'Planned';
+      if (!isValidProjectStatus(status)) {
+        throw new Error(`Invalid project status "${status}". Valid: Planned, Active, On Hold, Completed, Cancelled`);
+      }
+      let slug = mintProjectSlug(args.name);
+      if (await prisma.project.findUnique({ where: { slug } })) {
+        slug = `${slug}-${Math.floor(Math.random() * 10000).toString(36)}`;
+      }
       const proj = await prisma.project.create({
         data: {
           name: args.name,
+          slug,
           description: args.description || null,
-          status: args.status || 'Planned',
+          status,
           productId: args.productId || null
         }
       });
-      revalidate('/');
-      return text(`Successfully created project ${proj.name}`);
+      revalidate('/', '/projects');
+      return text(`Successfully created project ${proj.name} (slug ${proj.slug}, ${proj.status})`);
+    }
+  },
+  {
+    name: 'read_project',
+    description: 'Read one project in full: lifecycle status and legal transitions, dates, product, durable-doc coverage (Charter, Design, Risk, Retrospective), a derived status report (issues by status, completion, open blockers), its issues, and recent project-scoped change logs.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        slug: { type: 'string', description: 'The project slug (e.g. fionn-cognitive-command-layer)' },
+        projectId: { type: 'string', description: 'The UUID of the project, as an alternative to slug' }
+      }
+    },
+    handler: async (args) => {
+      const project = args?.projectId
+        ? await prisma.project.findUnique({ where: { id: args.projectId } })
+        : args?.slug
+          ? await prisma.project.findUnique({ where: { slug: args.slug } })
+          : null;
+      if (!project) throw new Error('Project not found: provide a valid slug or projectId');
+      const full = await prisma.project.findUnique({
+        where: { id: project.id },
+        include: {
+          product: { select: { slug: true, name: true } },
+          issues: { select: { identifier: true, title: true, status: true, priority: true, parent: { select: { identifier: true } } }, orderBy: { identifier: 'asc' } },
+          documents: { select: { slug: true, title: true, docType: true, updatedAt: true } },
+          changeLogs: { orderBy: { createdAt: 'desc' }, take: 10, select: { type: true, description: true, approvedBy: true, createdAt: true } },
+        }
+      });
+      const issues = full!.issues;
+      const done = issues.filter(i => i.status === 'Done').length;
+      const statusReport = {
+        totalIssues: issues.length,
+        byStatus: issues.reduce((acc: Record<string, number>, i) => { acc[i.status] = (acc[i.status] ?? 0) + 1; return acc; }, {}),
+        completionPct: issues.length ? Math.round((done / issues.length) * 100) : 0,
+        openBlockers: issues.filter(i => i.status !== 'Done' && i.status !== 'Cancelled' && (i.priority === 'High' || i.priority === 'Critical')).map(i => i.identifier),
+      };
+      return json({ ...full, statusReport, allowedNextStatuses: allowedNextProjectStatuses(full!.status) });
     }
   },
   {
@@ -559,18 +606,19 @@ export const mcpTools: ToolDef[] = [
   },
   {
     name: 'create_change_log',
-    description: 'Create a new Change Control audit log (e.g. database migration, release version deploy).',
+    description: 'Create a new Change Control audit log. Types include Deployment, Migration, API Release, Config Change — and "Decision" for project decision-log entries (scope with projectId).',
     inputSchema: {
       type: 'object',
       properties: {
-        type: { type: 'string', description: 'Deployment, Migration, API Release, Config Change' },
+        type: { type: 'string', description: 'Deployment, Migration, API Release, Config Change, Decision' },
         description: { type: 'string', description: 'Detailed description of the change' },
         reason: { type: 'string', description: 'Why this change was made / rationale' },
         approvedBy: { type: 'string', description: 'Name of the human approver (e.g., George Loudon)' },
         implementedBy: { type: 'string', description: 'Name of the runner (e.g., Antigravity or George Loudon)' },
         productId: { type: 'string', description: 'Optional UUID of the Product scope' },
         repoId: { type: 'string', description: 'Optional UUID of the Repository scope' },
-        issueId: { type: 'string', description: 'Optional UUID of the associated Issue' }
+        issueId: { type: 'string', description: 'Optional UUID of the associated Issue' },
+        projectId: { type: 'string', description: 'Optional UUID of the Project scope (use with type "Decision" for project decision logs)' }
       },
       required: ['type', 'description', 'approvedBy', 'implementedBy']
     },
@@ -587,7 +635,8 @@ export const mcpTools: ToolDef[] = [
           implementedBy: args.implementedBy,
           productId: args.productId || null,
           repoId: args.repoId || null,
-          issueId: args.issueId || null
+          issueId: args.issueId || null,
+          projectId: args.projectId || null
         }
       });
       revalidate('/change-control');
