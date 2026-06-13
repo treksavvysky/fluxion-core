@@ -17,6 +17,8 @@
 // Usage:
 //   node --env-file=.env agents/fionn.mjs triage              # triage all Triage issues
 //   node --env-file=.env agents/fionn.mjs triage FLX-124      # triage one issue
+//   node --env-file=.env agents/fionn.mjs decompose FLX-102           # PROPOSE a breakdown (no mutation)
+//   node --env-file=.env agents/fionn.mjs decompose FLX-102 --apply   # apply via the layer (human gate)
 //
 // Config (env):
 //   ANTHROPIC_API_KEY  required
@@ -120,10 +122,110 @@ async function triageIssue(identifier) {
   return decision;
 }
 
+// --- Decomposition proposal (FLX-127): human-gated goal-tree synthesis ---
+const DECOMPOSE_SCHEMA = {
+  type: 'object',
+  properties: {
+    children: {
+      type: 'array',
+      description: 'The proposed child issues: between 2 and 7, each independently executable by a single agent',
+      items: {
+        type: 'object',
+        properties: {
+          title: { type: 'string', description: 'Concise, action-oriented child title' },
+          description: { type: 'string', description: 'What this child delivers' },
+          context: { type: 'string', description: 'Agent contract: why this child exists and what an executor must know' },
+          acceptanceCriteria: { type: 'string', description: 'Agent contract: verifiable Done conditions as markdown checkboxes ("- [ ] ...")' },
+          technicalIntent: { type: 'string', description: 'Agent contract: intended approach or constraints' },
+          priority: { type: 'string', enum: ['Low', 'Medium', 'High', 'Critical'] },
+        },
+        required: ['title', 'description', 'context', 'acceptanceCriteria', 'technicalIntent', 'priority'],
+        additionalProperties: false,
+      },
+    },
+    rationale: {
+      type: 'string',
+      description: 'Why this decomposition: ordering logic, seams chosen, and how it stays inside the product boundaries',
+    },
+  },
+  required: ['children', 'rationale'],
+  additionalProperties: false,
+};
+
+const DECOMPOSE_SYSTEM = `You are Fionn, the goal-tree function of an AI-native project tracker. You receive a Context Package for one epic-shaped issue. Propose its decomposition into 2-7 child issues.
+
+Rules:
+- Each child must be independently executable by a single agent in one focused effort, with a complete contract (context, checkbox acceptance criteria, technical intent).
+- Acceptance criteria must be verifiable conditions written as markdown checkboxes ("- [ ] ..."), because the Verification Gatekeeper will block Done until each is attested with evidence.
+- Stay strictly inside the Product Boundaries from the package; if part of the epic crosses a boundary, exclude it and say so in the rationale.
+- Order children by dependency: earlier children unblock later ones.
+- You are proposing structure, not performing work: never include implementation output in the proposal.`;
+
+async function decomposeIssue(identifier, apply) {
+  const pkg = await layer('hydrate_issue_context', { identifier });
+
+  const response = await anthropic.messages.create({
+    model: MODEL,
+    max_tokens: 16000,
+    system: DECOMPOSE_SYSTEM,
+    output_config: { format: { type: 'json_schema', schema: DECOMPOSE_SCHEMA } },
+    messages: [{ role: 'user', content: pkg }],
+  });
+
+  if (response.stop_reason === 'refusal') throw new Error('model refused');
+  if (response.stop_reason === 'max_tokens') throw new Error('output truncated — proposal discarded');
+
+  const proposal = JSON.parse(response.content.find(b => b.type === 'text').text);
+
+  if (!Array.isArray(proposal.children) || proposal.children.length < 2 || proposal.children.length > 7) {
+    throw new Error(`proposal has ${proposal.children?.length ?? 0} children; required 2-7 — rejected before application`);
+  }
+
+  console.log(`\nFionn decomposition proposal for ${identifier} (${MODEL}):`);
+  console.log(`\nRationale: ${proposal.rationale}\n`);
+  proposal.children.forEach((c, i) => {
+    console.log(`  ${i + 1}. [${c.priority}] ${c.title}`);
+    console.log(`     ${c.description}`);
+    console.log(`     criteria: ${c.acceptanceCriteria.split('\n').filter(l => l.trim().startsWith('- [')).length} checkbox(es)`);
+  });
+
+  if (!apply) {
+    console.log('\nProposal only — nothing applied. Re-run with --apply to create these issues through the layer.');
+    return proposal;
+  }
+
+  // Human gate passed (--apply): enforce & audit through the layer
+  const result = await layer('decompose_issue', { parentIdentifier: identifier, children: proposal.children });
+  const issue = JSON.parse(await layer('read_issue', { identifier }));
+  await layer('create_change_log', {
+    type: 'Decision',
+    description: `Fionn decomposition applied: ${result}. Rationale: ${proposal.rationale}`,
+    reason: `Proposal by Fionn agent (model ${MODEL}); applied via --apply human gate`,
+    approvedBy: process.env.FIONN_OPERATOR || 'operator (--apply gate)',
+    implementedBy: `Fionn/${MODEL}`,
+    issueId: issue.id,
+    productId: issue.productId ?? undefined,
+  });
+  console.log(`\nApplied: ${result}`);
+  return proposal;
+}
+
 async function main() {
-  const [mode, target] = process.argv.slice(2);
+  const args = process.argv.slice(2);
+  const apply = args.includes('--apply');
+  const [mode, target] = args.filter(a => a !== '--apply');
+
+  if (mode === 'decompose') {
+    if (!target) {
+      console.log('Usage: node --env-file=.env agents/fionn.mjs decompose IDENTIFIER [--apply]');
+      process.exit(1);
+    }
+    await decomposeIssue(target.toUpperCase(), apply);
+    return;
+  }
+
   if (mode !== 'triage') {
-    console.log('Usage: node --env-file=.env agents/fionn.mjs triage [IDENTIFIER]');
+    console.log('Usage: node --env-file=.env agents/fionn.mjs <triage [IDENTIFIER] | decompose IDENTIFIER [--apply]>');
     process.exit(1);
   }
 
