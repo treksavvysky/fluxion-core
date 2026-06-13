@@ -28,6 +28,8 @@
 //   FLUXION_API_KEY    required (Fluxion MCP auth)
 
 import Anthropic from '@anthropic-ai/sdk';
+import { createHash } from 'node:crypto';
+import { mkdirSync, writeFileSync, readFileSync, unlinkSync, existsSync } from 'node:fs';
 
 const MODEL = process.env.FIONN_MODEL || 'claude-haiku-4-5-20251001';
 const BASE_URL = process.env.FLUXION_URL || 'http://localhost:3002';
@@ -161,7 +163,60 @@ Rules:
 - Order children by dependency: earlier children unblock later ones.
 - You are proposing structure, not performing work: never include implementation output in the proposal.`;
 
+// Gate integrity (FLX-128): the human gate is only meaningful if the
+// reviewed artifact is the applied artifact. The propose run persists the
+// proposal to .fionn/proposals/<IDENT>.json with a hash of the epic's
+// contract; --apply applies that file verbatim (no model call) and refuses
+// if the proposal is missing or the contract changed since review.
+const PROPOSAL_DIR = '.fionn/proposals';
+
+function contractHash(issue) {
+  return createHash('sha256')
+    .update([issue.title, issue.description, issue.context, issue.acceptanceCriteria, issue.technicalIntent].map(v => v ?? '').join(' '))
+    .digest('hex').slice(0, 32);
+}
+
+function printProposal(identifier, proposal) {
+  console.log(`\nFionn decomposition proposal for ${identifier} (${proposal.model ?? MODEL}):`);
+  console.log(`\nRationale: ${proposal.rationale}\n`);
+  proposal.children.forEach((c, i) => {
+    console.log(`  ${i + 1}. [${c.priority}] ${c.title}`);
+    console.log(`     ${c.description}`);
+    console.log(`     criteria: ${c.acceptanceCriteria.split('\n').filter(l => l.trim().startsWith('- [')).length} checkbox(es)`);
+  });
+}
+
 async function decomposeIssue(identifier, apply) {
+  const issue = JSON.parse(await layer('read_issue', { identifier }));
+  const proposalPath = `${PROPOSAL_DIR}/${identifier}.json`;
+
+  if (apply) {
+    // Apply the PERSISTED proposal verbatim — never a fresh model call.
+    if (!existsSync(proposalPath)) {
+      throw new Error(`no persisted proposal for ${identifier}. Run "decompose ${identifier}" first, review the output, then re-run with --apply.`);
+    }
+    const saved = JSON.parse(readFileSync(proposalPath, 'utf8'));
+    if (saved.contractHash !== contractHash(issue)) {
+      throw new Error(`stale proposal: ${identifier}'s contract changed since the proposal was reviewed. Re-run "decompose ${identifier}" to propose against the current contract.`);
+    }
+    const proposal = saved.proposal;
+    printProposal(identifier, { ...proposal, model: saved.model });
+
+    const result = await layer('decompose_issue', { parentIdentifier: identifier, children: proposal.children });
+    await layer('create_change_log', {
+      type: 'Decision',
+      description: `Fionn decomposition applied: ${result}. Rationale: ${proposal.rationale}`,
+      reason: `Proposal by Fionn agent (model ${saved.model}); reviewed and applied verbatim via --apply human gate`,
+      approvedBy: process.env.FIONN_OPERATOR || 'operator (--apply gate)',
+      implementedBy: `Fionn/${saved.model}`,
+      issueId: issue.id,
+      productId: issue.productId ?? undefined,
+    });
+    unlinkSync(proposalPath);
+    console.log(`\nApplied: ${result}`);
+    return proposal;
+  }
+
   const pkg = await layer('hydrate_issue_context', { identifier });
 
   const response = await anthropic.messages.create({
@@ -181,34 +236,19 @@ async function decomposeIssue(identifier, apply) {
     throw new Error(`proposal has ${proposal.children?.length ?? 0} children; required 2-7 — rejected before application`);
   }
 
-  console.log(`\nFionn decomposition proposal for ${identifier} (${MODEL}):`);
-  console.log(`\nRationale: ${proposal.rationale}\n`);
-  proposal.children.forEach((c, i) => {
-    console.log(`  ${i + 1}. [${c.priority}] ${c.title}`);
-    console.log(`     ${c.description}`);
-    console.log(`     criteria: ${c.acceptanceCriteria.split('\n').filter(l => l.trim().startsWith('- [')).length} checkbox(es)`);
-  });
+  mkdirSync(PROPOSAL_DIR, { recursive: true });
+  writeFileSync(proposalPath, JSON.stringify({
+    identifier,
+    model: MODEL,
+    contractHash: contractHash(issue),
+    proposal,
+  }, null, 2));
 
-  if (!apply) {
-    console.log('\nProposal only — nothing applied. Re-run with --apply to create these issues through the layer.');
-    return proposal;
-  }
-
-  // Human gate passed (--apply): enforce & audit through the layer
-  const result = await layer('decompose_issue', { parentIdentifier: identifier, children: proposal.children });
-  const issue = JSON.parse(await layer('read_issue', { identifier }));
-  await layer('create_change_log', {
-    type: 'Decision',
-    description: `Fionn decomposition applied: ${result}. Rationale: ${proposal.rationale}`,
-    reason: `Proposal by Fionn agent (model ${MODEL}); applied via --apply human gate`,
-    approvedBy: process.env.FIONN_OPERATOR || 'operator (--apply gate)',
-    implementedBy: `Fionn/${MODEL}`,
-    issueId: issue.id,
-    productId: issue.productId ?? undefined,
-  });
-  console.log(`\nApplied: ${result}`);
+  printProposal(identifier, proposal);
+  console.log(`\nProposal only — nothing applied. Persisted to ${proposalPath}; re-run with --apply to create exactly these issues through the layer.`);
   return proposal;
 }
+
 
 async function main() {
   const args = process.argv.slice(2);
