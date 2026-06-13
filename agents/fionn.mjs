@@ -23,8 +23,9 @@
 //
 // Config (env):
 //   ANTHROPIC_API_KEY  required
-//   FIONN_MODEL        default claude-haiku-4-5-20251001 (testing);
-//                      production: claude-sonnet-4-6, or claude-opus-4-8 for advanced tasks
+//   FIONN_MODEL        default claude-sonnet-4-6 (production judgment, bumped from
+//                      haiku after a head-to-head — better-calibrated verdicts);
+//                      claude-haiku-4-5-20251001 for cheap testing, claude-opus-4-8 for hardest judgments
 //   FLUXION_URL        default http://localhost:3002
 //   FLUXION_API_KEY    required (Fluxion MCP auth)
 
@@ -32,7 +33,7 @@ import Anthropic from '@anthropic-ai/sdk';
 import { createHash } from 'node:crypto';
 import { mkdirSync, writeFileSync, readFileSync, unlinkSync, existsSync } from 'node:fs';
 
-const MODEL = process.env.FIONN_MODEL || 'claude-haiku-4-5-20251001';
+const MODEL = process.env.FIONN_MODEL || 'claude-sonnet-4-6';
 const BASE_URL = process.env.FLUXION_URL || 'http://localhost:3002';
 const FLUXION_KEY = process.env.FLUXION_API_KEY;
 if (!FLUXION_KEY) throw new Error('FLUXION_API_KEY must be set');
