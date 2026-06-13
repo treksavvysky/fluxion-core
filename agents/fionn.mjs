@@ -19,6 +19,7 @@
 //   node --env-file=.env agents/fionn.mjs triage FLX-124      # triage one issue
 //   node --env-file=.env agents/fionn.mjs decompose FLX-102           # PROPOSE a breakdown (no mutation)
 //   node --env-file=.env agents/fionn.mjs decompose FLX-102 --apply   # apply via the layer (human gate)
+//   node --env-file=.env agents/fionn.mjs verify AETHERMUX-3          # judge attestation evidence (advisory, no mutation)
 //
 // Config (env):
 //   ANTHROPIC_API_KEY  required
@@ -250,10 +251,130 @@ async function decomposeIssue(identifier, apply) {
 }
 
 
+// --- Verification (FLX-130): independent judgment on attestation evidence ---
+// Judgment-only: Fionn judges whether the cited evidence substantiates each
+// attested criterion. It mutates no issue state and posts nothing external;
+// it records an advisory Verification change log. Per the Charter, Fionn does
+// NOT execute or re-run anything — it judges the evidence as presented, the
+// way a reviewer reads a PR description rather than re-running its CI.
+const VERIFY_SCHEMA = {
+  type: 'object',
+  properties: {
+    criteria: {
+      type: 'array',
+      items: {
+        type: 'object',
+        properties: {
+          index: { type: 'number', description: 'The criterion index being judged' },
+          verdict: {
+            type: 'string',
+            enum: ['supported', 'insufficient', 'contradicted', 'unverifiable'],
+            description: 'supported: evidence concretely substantiates the claim; insufficient: too vague/generic/circular to confirm; contradicted: evidence undercuts the claim or is internally inconsistent; unverifiable: no concrete artifact cited and the claim cannot be confirmed from evidence alone',
+          },
+          rationale: { type: 'string', description: 'One to three sentences judging the evidence' },
+        },
+        required: ['index', 'verdict', 'rationale'],
+        additionalProperties: false,
+      },
+    },
+    overallVerdict: {
+      type: 'string',
+      enum: ['pass', 'concerns', 'fail'],
+      description: 'pass: every criterion supported; concerns: some insufficient/unverifiable but none contradicted; fail: any criterion contradicted',
+    },
+    summary: { type: 'string', description: 'One or two sentences on the overall judgment' },
+  },
+  required: ['criteria', 'overallVerdict', 'summary'],
+  additionalProperties: false,
+};
+
+const VERIFY_SYSTEM = `You are Fionn, the verification function of an AI-native project tracker. You receive an issue's contract and the evidence an executor attested for each acceptance criterion. Judge whether the cited EVIDENCE actually substantiates each criterion.
+
+Hard constraints:
+- You judge the evidence as presented. You do NOT re-run commands, tests, or builds — execution belongs to the execution plane, not to you. Treat this like a reviewer reading a pull request's description, not re-running its CI.
+- Per criterion verdict:
+  - "supported": specific, checkable evidence substantiates the claim (names the test, the command, the observed result, a commit hash, an API response, etc.).
+  - "insufficient": evidence is vague, generic, or circular ("works as expected", "implemented and tested" with no specifics).
+  - "contradicted": evidence undercuts the claim or is internally inconsistent.
+  - "unverifiable": the claim cannot be confirmed from the evidence alone and no concrete artifact is cited (e.g. "survives restart" with no restart actually exercised).
+- Be skeptical but fair: reward specific, checkable evidence. You can catch weak, vague, or contradictory evidence; you CANNOT catch plausible fabrication — if a verdict hinges on trusting an unverifiable claim, say so.
+- overallVerdict: "pass" only if every criterion is supported; "concerns" if some are insufficient/unverifiable but none contradicted; "fail" if any is contradicted.`;
+
+const VERDICT_MARK = { supported: '✓', insufficient: '~', contradicted: '✗', unverifiable: '?' };
+
+async function verifyIssue(identifier) {
+  const issue = JSON.parse(await layer('read_issue', { identifier }));
+  const attested = (issue.checklist || []).filter(c => c.attested);
+  if (attested.length === 0) {
+    console.log(`${identifier}: no attested checkbox criteria to verify.`);
+    return null;
+  }
+
+  const evidenceBlock = attested.map(c =>
+    `### Criterion [${c.index}]: ${c.text}\nAttestor: ${c.attestor ?? 'unknown'}\nEvidence: ${c.evidence || '(none provided)'}`
+  ).join('\n\n');
+  const userMsg = [
+    `# Issue ${issue.identifier} — ${issue.title}`,
+    '',
+    '## Contract',
+    `Description: ${issue.description || '(none)'}`,
+    `Context: ${issue.context || '(none)'}`,
+    `Technical intent: ${issue.technicalIntent || '(none)'}`,
+    '',
+    '## Attested criteria and evidence to judge',
+    evidenceBlock,
+  ].join('\n');
+
+  const response = await anthropic.messages.create({
+    model: MODEL,
+    max_tokens: 8000,
+    system: VERIFY_SYSTEM,
+    output_config: { format: { type: 'json_schema', schema: VERIFY_SCHEMA } },
+    messages: [{ role: 'user', content: userMsg }],
+  });
+
+  if (response.stop_reason === 'refusal') throw new Error('model refused');
+  if (response.stop_reason === 'max_tokens') throw new Error('verdict truncated — discarded');
+
+  const verdict = JSON.parse(response.content.find(b => b.type === 'text').text);
+
+  console.log(`\nFionn verification of ${identifier} (${MODEL}) — overall: ${verdict.overallVerdict.toUpperCase()}`);
+  console.log(`${verdict.summary}\n`);
+  for (const c of verdict.criteria.sort((a, b) => a.index - b.index)) {
+    const crit = attested.find(a => a.index === c.index);
+    console.log(`  [${VERDICT_MARK[c.verdict] ?? '?'}] ${c.verdict} — criterion ${c.index}: ${crit?.text ?? ''}`);
+    console.log(`      ${c.rationale}`);
+  }
+
+  // Audit (judgment-only): record the verdict, mutate nothing.
+  const counts = verdict.criteria.reduce((a, c) => { a[c.verdict] = (a[c.verdict] ?? 0) + 1; return a; }, {});
+  const tally = Object.entries(counts).map(([k, v]) => `${v} ${k}`).join(', ');
+  await layer('create_change_log', {
+    type: 'Verification',
+    description: `Fionn verification of ${identifier}: ${verdict.overallVerdict.toUpperCase()} — ${verdict.summary} [${tally}]`,
+    reason: `Advisory judgment-only verification by Fionn (model ${MODEL}); evidence judged as presented, no execution, issue state unchanged.`,
+    approvedBy: 'Fionn (advisory verification)',
+    implementedBy: `Fionn/${MODEL}`,
+    issueId: issue.id,
+    productId: issue.productId ?? undefined,
+  });
+  console.log(`\nVerdict recorded to Change Control (advisory; ${identifier} state unchanged).`);
+  return verdict;
+}
+
 async function main() {
   const args = process.argv.slice(2);
   const apply = args.includes('--apply');
   const [mode, target] = args.filter(a => a !== '--apply');
+
+  if (mode === 'verify') {
+    if (!target) {
+      console.log('Usage: node --env-file=.env agents/fionn.mjs verify IDENTIFIER');
+      process.exit(1);
+    }
+    await verifyIssue(target.toUpperCase());
+    return;
+  }
 
   if (mode === 'decompose') {
     if (!target) {
@@ -265,7 +386,7 @@ async function main() {
   }
 
   if (mode !== 'triage') {
-    console.log('Usage: node --env-file=.env agents/fionn.mjs <triage [IDENTIFIER] | decompose IDENTIFIER [--apply]>');
+    console.log('Usage: node --env-file=.env agents/fionn.mjs <triage [IDENTIFIER] | decompose IDENTIFIER [--apply] | verify IDENTIFIER>');
     process.exit(1);
   }
 
