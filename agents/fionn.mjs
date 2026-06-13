@@ -1,9 +1,18 @@
 // Fionn agent harness v0 (FLX-126) — autonomous triage through the
-// deterministic Cognitive Command Layer.
+// deterministic Cognitive Control Layer.
 //
 // Fionn-the-agent is a CLIENT of Fionn-the-layer: the layer hydrates context
 // and enforces the protocol; the agent (Claude, via the Anthropic SDK)
 // supplies the judgment. No LLM call ever happens inside the layer itself.
+//
+// SCOPE GUARD (Fionn Project Charter, fionn-project-charter): Fionn is
+// cognitive control ONLY — it governs, sandboxes, and verifies. It is NOT
+// an autonomous software engineer: no mode of this harness may write, edit,
+// or execute code, or perform the work an issue describes. Every mode must
+// follow the three-phase pipeline: hydrate (deterministic) -> judge (one
+// schema-bounded model call) -> enforce & audit (deterministic). Capabilities
+// that do engineering work belong to execution agents operating THROUGH the
+// layer, never to Fionn.
 //
 // Usage:
 //   node --env-file=.env agents/fionn.mjs triage              # triage all Triage issues
