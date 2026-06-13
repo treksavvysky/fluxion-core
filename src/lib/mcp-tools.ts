@@ -722,7 +722,8 @@ export const mcpTools: ToolDef[] = [
         docType: { type: 'string', description: 'Durable-doc slot: Vision, Boundaries, Architecture, or General (default)' },
         productId: { type: 'string', description: 'Optional UUID of the associated Product' },
         repoId: { type: 'string', description: 'Optional UUID of the associated Repository' },
-        projectId: { type: 'string', description: 'Optional UUID of the associated Project' }
+        projectId: { type: 'string', description: 'Optional UUID of the associated Project' },
+        cycleId: { type: 'string', description: 'Optional UUID of the associated Cycle (for CyclePlan/CycleReview docs)' }
       },
       required: ['title', 'content']
     },
@@ -735,7 +736,8 @@ export const mcpTools: ToolDef[] = [
         docType: args?.docType,
         productId: args?.productId,
         repoId: args?.repoId,
-        projectId: args?.projectId
+        projectId: args?.projectId,
+        cycleId: args?.cycleId
       });
       revalidate('/docs');
       return text(`Successfully ${created ? 'published' : 'updated'} document ${doc.title} at slug: ${doc.slug}${created ? '' : ' (previous version saved to revision history)'}`);

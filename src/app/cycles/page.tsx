@@ -1,14 +1,17 @@
 import styles from './cycles.module.css';
 import { getCyclesWithProductMetrics, getProducts } from '@/actions/products';
-import { prisma } from '@/lib/prisma';
 import { Target, CalendarDays, Plus, Filter, Award } from 'lucide-react';
+import Link from 'next/link';
+import NewCycleModal from '@/components/NewCycleModal';
 
 interface CycleMetric {
   id: string;
+  slug: string | null;
   name: string;
+  goal: string | null;
   startDate: Date;
   endDate: Date;
-  isActive: boolean;
+  status: string;
   totalIssues: number;
   completedIssues: number;
   completionRate: number;
@@ -22,31 +25,18 @@ interface ProductInfo {
   slug: string;
 }
 
-export default async function CyclesPage({ searchParams }: { searchParams: Promise<{ productId?: string }> }) {
+export default async function CyclesPage({ searchParams }: { searchParams: Promise<{ productId?: string, new?: string }> }) {
   const params = await searchParams;
   const selectedProductId = params?.productId || 'all';
+  const isNewOpen = params?.new === 'true';
 
   const products = await getProducts();
   const cycles = await getCyclesWithProductMetrics(selectedProductId === 'all' ? null : selectedProductId);
 
-  // Fallback seeder if cycles is empty
-  if (cycles.length === 0) {
-    await prisma.cycle.create({
-      data: {
-        name: 'Cycle 41',
-        startDate: new Date(),
-        endDate: new Date(Date.now() + 14 * 24 * 60 * 60 * 1000),
-        isActive: true
-      }
-    });
-    const refreshedCycles = await getCyclesWithProductMetrics(selectedProductId === 'all' ? null : selectedProductId);
-    return renderCycles(refreshedCycles, products, selectedProductId);
-  }
-
-  return renderCycles(cycles, products, selectedProductId);
+  return renderCycles(cycles, products, selectedProductId, isNewOpen);
 }
 
-function renderCycles(cycles: CycleMetric[], products: ProductInfo[], selectedProductId: string) {
+function renderCycles(cycles: CycleMetric[], products: ProductInfo[], selectedProductId: string, isNewOpen: boolean) {
   return (
     <div className={styles.container}>
       <header className={styles.header}>
@@ -60,9 +50,11 @@ function renderCycles(cycles: CycleMetric[], products: ProductInfo[], selectedPr
           </span>
         </div>
         <div className={styles.actions}>
-          <button className={styles.newBtn}>
-            <Plus size={14} /> New Cycle
-          </button>
+          <Link href="/cycles?new=true" style={{ textDecoration: 'none' }}>
+            <button className={styles.newBtn}>
+              <Plus size={14} /> New Cycle
+            </button>
+          </Link>
         </div>
       </header>
 
@@ -113,11 +105,13 @@ function renderCycles(cycles: CycleMetric[], products: ProductInfo[], selectedPr
         
         <div className={styles.issueList} style={{ display: 'flex', flexDirection: 'column' }}>
           {cycles.map(cycle => (
-            <div key={cycle.id} className={styles.cycleRow}>
+            <Link href={`/cycles/${cycle.slug ?? cycle.id}`} key={cycle.id} style={{ textDecoration: 'none', color: 'inherit', display: 'block' }}>
+            <div className={styles.cycleRow} title={cycle.goal ?? undefined}>
               <div className={styles.nameCell}>
                 <Target size={14} color="var(--accent)" />
                 {cycle.name}
-                {cycle.isActive && <span className={styles.activeLabel}>Active</span>}
+                {cycle.status === 'Active' && <span className={styles.activeLabel}>Active</span>}
+                {cycle.status === 'Completed' && <span style={{ fontSize: '10px', color: 'var(--text-muted)', textTransform: 'uppercase', fontWeight: 700 }}>Completed</span>}
               </div>
               <div className={styles.timelineCell}>
                 <CalendarDays size={14} />
@@ -148,9 +142,12 @@ function renderCycles(cycles: CycleMetric[], products: ProductInfo[], selectedPr
                 {cycle.completedIssues} closed • {cycle.totalIssues - cycle.completedIssues} open
               </div>
             </div>
+            </Link>
           ))}
         </div>
       </div>
+
+      {isNewOpen && <NewCycleModal />}
     </div>
   );
 }

@@ -82,14 +82,18 @@ model Roadmap {
 }
 
 model Cycle {
-  id          String   @id @default(cuid())
-  name        String
-  startDate   DateTime
-  endDate     DateTime
-  isActive    Boolean  @default(false)
-  issues      Issue[]
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  id             String   @id @default(cuid())
+  slug           String?  @unique // minted from name at creation; nullable only for pre-FLX-129 rows
+  name           String
+  goal           String?  // the 1-2 sentence operational win for this sprint block
+  status         String   @default("Planned") // Planned, Active, Completed — transitions enforced in src/lib/cycles.ts; at most one Active
+  capacityPoints Int?     // projected point capacity (velocity weights: High=3, Medium=2, Low=1)
+  startDate      DateTime
+  endDate        DateTime
+  issues         Issue[]
+  documents      Document[]
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
 }
 
 model Product {
@@ -226,6 +230,8 @@ model Document {
   repo        Repository? @relation(fields: [repoId], references: [id])
   projectId   String?
   project     Project?    @relation(fields: [projectId], references: [id])
+  cycleId     String?
+  cycle       Cycle?      @relation(fields: [cycleId], references: [id])
   revisions   DocumentRevision[]
 }
 

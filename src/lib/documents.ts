@@ -5,6 +5,8 @@ export const VALID_DOC_TYPES = [
   'Vision', 'Boundaries', 'Architecture',
   // Project durable docs (FLX-125)
   'Charter', 'Design', 'Risk', 'Retrospective',
+  // Cycle durable docs (FLX-129)
+  'CyclePlan', 'CycleReview',
   'General',
 ] as const;
 
@@ -21,6 +23,7 @@ export interface UpsertDocumentInput {
   productId?: string | null;
   repoId?: string | null;
   projectId?: string | null;
+  cycleId?: string | null;
 }
 
 // Upsert-by-slug with revision history (FLX-120). Replaces the old behavior
@@ -60,6 +63,7 @@ export async function upsertDocument(input: UpsertDocumentInput) {
           productId: input.productId !== undefined ? input.productId : existing.productId,
           repoId: input.repoId !== undefined ? input.repoId : existing.repoId,
           projectId: input.projectId !== undefined ? input.projectId : existing.projectId,
+          cycleId: input.cycleId !== undefined ? input.cycleId : existing.cycleId,
         },
       }),
     ]);
@@ -76,6 +80,7 @@ export async function upsertDocument(input: UpsertDocumentInput) {
       productId: input.productId || null,
       repoId: input.repoId || null,
       projectId: input.projectId || null,
+      cycleId: input.cycleId || null,
     },
   });
   return { document: created, created: true };

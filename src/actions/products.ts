@@ -199,10 +199,12 @@ export async function getCyclesWithProductMetrics(productId: string | null) {
 
     return {
       id: cycle.id,
+      slug: cycle.slug,
       name: cycle.name,
+      goal: cycle.goal,
       startDate: cycle.startDate,
       endDate: cycle.endDate,
-      isActive: cycle.isActive,
+      status: cycle.status,
       totalIssues,
       completedIssues,
       completionRate,
