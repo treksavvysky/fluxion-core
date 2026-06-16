@@ -281,11 +281,39 @@ const VERIFY_SCHEMA = {
     overallVerdict: {
       type: 'string',
       enum: ['pass', 'concerns', 'fail'],
-      description: 'pass: every criterion supported; concerns: some insufficient/unverifiable but none contradicted; fail: any criterion contradicted',
+      description: 'Based on the per-criterion EVIDENCE verdicts only (independent of policy/coverage): pass: every criterion supported; concerns: some insufficient/unverifiable but none contradicted; fail: any criterion contradicted',
     },
     summary: { type: 'string', description: 'One or two sentences on the overall judgment' },
+    policyConflicts: {
+      type: 'array',
+      description: 'Criteria that an active Decision supersedes or contradicts. Empty if none. (FLX-131)',
+      items: {
+        type: 'object',
+        properties: {
+          criterionIndex: { type: 'number', description: 'The affected criterion index' },
+          decision: { type: 'string', description: 'Short reference to the superseding/contradicting Decision' },
+          detail: { type: 'string', description: 'How the Decision conflicts with the criterion' },
+        },
+        required: ['criterionIndex', 'decision', 'detail'],
+        additionalProperties: false,
+      },
+    },
+    coverageGaps: {
+      type: 'array',
+      description: 'Boundary/architecture requirements from the briefs that the criteria as a whole fail to cover. Empty if none. (FLX-131)',
+      items: {
+        type: 'object',
+        properties: {
+          requirement: { type: 'string', description: 'The brief requirement not covered by any criterion' },
+          fromBrief: { type: 'string', description: 'Boundaries or Architecture' },
+          detail: { type: 'string', description: 'Why the criteria fail to cover it' },
+        },
+        required: ['requirement', 'fromBrief', 'detail'],
+        additionalProperties: false,
+      },
+    },
   },
-  required: ['criteria', 'overallVerdict', 'summary'],
+  required: ['criteria', 'overallVerdict', 'summary', 'policyConflicts', 'coverageGaps'],
   additionalProperties: false,
 };
 
@@ -299,7 +327,12 @@ Hard constraints:
   - "contradicted": evidence undercuts the claim or is internally inconsistent.
   - "unverifiable": the claim cannot be confirmed from the evidence alone and no concrete artifact is cited (e.g. "survives restart" with no restart actually exercised).
 - Be skeptical but fair: reward specific, checkable evidence. You can catch weak, vague, or contradictory evidence; you CANNOT catch plausible fabrication — if a verdict hinges on trusting an unverifiable claim, say so.
-- overallVerdict: "pass" only if every criterion is supported; "concerns" if some are insufficient/unverifiable but none contradicted; "fail" if any is contradicted.`;
+- overallVerdict: "pass" only if every criterion is supported; "concerns" if some are insufficient/unverifiable but none contradicted; "fail" if any is contradicted. The overallVerdict reflects EVIDENCE ONLY — it is independent of the policy/coverage checks below.
+
+You are also given GOVERNING CONTEXT: the product's active Decisions and its Boundaries/Architecture briefs. Beyond the evidence verdicts, perform two separate, advisory checks (a criterion can have perfectly good evidence yet still be flagged here):
+- policyConflicts: flag a criterion ONLY when an active Decision genuinely SUPERSEDES or CONTRADICTS it (e.g. a criterion requiring something a later Decision reversed). If a criterion is merely CONSISTENT with a Decision, do NOT list it — silence means consistent. Never add "noted for completeness" or "no conflict" entries.
+- coverageGaps: flag a requirement from the Boundaries/Architecture briefs ONLY when it falls within THIS issue's own scope and phase AND no acceptance criterion enforces it. Do NOT flag requirements that belong to a later phase or to a different issue's responsibility (e.g. a Phase 2 mechanism is not a gap in a Phase 1 issue).
+Return empty arrays when there are genuinely no conflicts or gaps. Do not invent conflicts or gaps to seem thorough — over-flagging erodes trust in the signal.`;
 
 const VERDICT_MARK = { supported: '✓', insufficient: '~', contradicted: '✗', unverifiable: '?' };
 
@@ -311,6 +344,20 @@ async function verifyIssue(identifier) {
     return null;
   }
 
+  // Governing context (FLX-131): active Decisions + Boundaries/Architecture briefs.
+  let gov = { decisions: [], briefs: [] };
+  try {
+    gov = JSON.parse(await layer('read_governing_context', { identifier }));
+  } catch (e) {
+    console.log(`  (governing context unavailable: ${e.message} — judging evidence only)`);
+  }
+  const decisionsBlock = gov.decisions?.length
+    ? gov.decisions.map(d => `- [${d.type}] ${d.description}${d.reason ? `\n  reason: ${d.reason}` : ''}`).join('\n')
+    : '(no active Decisions on record)';
+  const briefsBlock = gov.briefs?.length
+    ? gov.briefs.map(b => `### ${b.docType} brief: ${b.title}\n${b.content}`).join('\n\n')
+    : '(no Boundaries/Architecture briefs on record)';
+
   const evidenceBlock = attested.map(c =>
     `### Criterion [${c.index}]: ${c.text}\nAttestor: ${c.attestor ?? 'unknown'}\nEvidence: ${c.evidence || '(none provided)'}`
   ).join('\n\n');
@@ -321,6 +368,12 @@ async function verifyIssue(identifier) {
     `Description: ${issue.description || '(none)'}`,
     `Context: ${issue.context || '(none)'}`,
     `Technical intent: ${issue.technicalIntent || '(none)'}`,
+    '',
+    '## Governing context — active Decisions',
+    decisionsBlock,
+    '',
+    '## Governing context — product briefs',
+    briefsBlock,
     '',
     '## Attested criteria and evidence to judge',
     evidenceBlock,
@@ -347,13 +400,28 @@ async function verifyIssue(identifier) {
     console.log(`      ${c.rationale}`);
   }
 
+  const policyConflicts = verdict.policyConflicts ?? [];
+  const coverageGaps = verdict.coverageGaps ?? [];
+  if (policyConflicts.length) {
+    console.log(`\n  POLICY CONFLICTS (criteria vs active Decisions):`);
+    for (const pc of policyConflicts) console.log(`  ⚠ criterion ${pc.criterionIndex}: ${pc.detail} [${pc.decision}]`);
+  }
+  if (coverageGaps.length) {
+    console.log(`\n  COVERAGE GAPS (briefs not covered by criteria):`);
+    for (const cg of coverageGaps) console.log(`  ⚠ ${cg.requirement} (${cg.fromBrief}): ${cg.detail}`);
+  }
+  if (!policyConflicts.length && !coverageGaps.length) {
+    console.log(`\n  No policy conflicts or boundary coverage gaps found.`);
+  }
+
   // Audit (judgment-only): record the verdict, mutate nothing.
   const counts = verdict.criteria.reduce((a, c) => { a[c.verdict] = (a[c.verdict] ?? 0) + 1; return a; }, {});
   const tally = Object.entries(counts).map(([k, v]) => `${v} ${k}`).join(', ');
+  const govTally = `${policyConflicts.length} policy conflict(s), ${coverageGaps.length} coverage gap(s)`;
   await layer('create_change_log', {
     type: 'Verification',
-    description: `Fionn verification of ${identifier}: ${verdict.overallVerdict.toUpperCase()} — ${verdict.summary} [${tally}]`,
-    reason: `Advisory judgment-only verification by Fionn (model ${MODEL}); evidence judged as presented, no execution, issue state unchanged.`,
+    description: `Fionn verification of ${identifier}: ${verdict.overallVerdict.toUpperCase()} — ${verdict.summary} [${tally}; ${govTally}]`,
+    reason: `Advisory judgment-only verification by Fionn (model ${MODEL}); evidence judged as presented, plus policy/boundary checks against governing context (FLX-131); no execution, issue state unchanged.`,
     approvedBy: 'Fionn (advisory verification)',
     implementedBy: `Fionn/${MODEL}`,
     issueId: issue.id,

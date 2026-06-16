@@ -1,4 +1,5 @@
 import { prisma } from './prisma';
+import { Prisma } from '@prisma/client';
 import { createNamespacedIssue, assertAllowedTransition, assertNoParentCycle, allowedNextStatuses, VALID_STATUSES } from './issues';
 import { getChecklist, parseCriteria } from './fionn/gatekeeper';
 import { computeProductMetrics } from './metrics';
@@ -250,6 +251,41 @@ export const mcpTools: ToolDef[] = [
         checklist: checklist.map(c => ({ index: c.index, text: c.text, attested: c.attested, attestor: c.attestor, evidence: c.evidence })),
         allowedNextStatuses: allowedNextStatuses(issue!.status)
       });
+    }
+  },
+  {
+    name: 'read_governing_context',
+    description: 'Read the governing context for an issue: the active Decision/Config-Change change logs scoped to the issue, its project, or its product, plus the product\'s durable Boundaries and Architecture briefs. Intended for boundary/policy-aware verification — judging whether an issue\'s criteria are consistent with current policy and cover the product boundaries, not just whether evidence supports the criteria as written.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        issueId: { type: 'string', description: 'The UUID of the issue' },
+        identifier: { type: 'string', description: 'The human identifier (e.g. AETHERMUX-5), as an alternative to issueId' }
+      }
+    },
+    handler: async (args) => {
+      const resolved = await resolveIssue(args ?? {});
+      if (!resolved) throw new Error('Issue not found: provide a valid issueId or identifier');
+      const issue = await prisma.issue.findUnique({
+        where: { id: resolved.id },
+        select: { id: true, identifier: true, productId: true, projectId: true }
+      });
+      const scope: Prisma.ChangeLogWhereInput[] = [{ issueId: issue!.id }];
+      if (issue!.projectId) scope.push({ projectId: issue!.projectId });
+      if (issue!.productId) scope.push({ productId: issue!.productId });
+      const decisions = await prisma.changeLog.findMany({
+        where: { type: { in: ['Decision', 'Config Change'] }, OR: scope },
+        orderBy: { createdAt: 'desc' },
+        take: 30,
+        select: { type: true, description: true, reason: true, createdAt: true }
+      });
+      const briefs = issue!.productId
+        ? await prisma.document.findMany({
+            where: { productId: issue!.productId, docType: { in: ['Boundaries', 'Architecture'] } },
+            select: { docType: true, title: true, content: true }
+          })
+        : [];
+      return json({ issue: issue!.identifier, decisions, briefs });
     }
   },
   {
