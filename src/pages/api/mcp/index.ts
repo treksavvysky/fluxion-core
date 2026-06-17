@@ -4,6 +4,7 @@ import { listToolSchemas, callTool } from '@/lib/mcp-tools';
 import { SSEServerTransport } from '@modelcontextprotocol/sdk/server/sse.js';
 import type { NextApiRequest, NextApiResponse } from 'next';
 import type { ServerResponse } from 'http';
+import { randomUUID } from 'node:crypto';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   // Fail closed when FLUXION_API_KEY is not configured
@@ -15,8 +16,20 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   // Support stateless HTTP JSON-RPC directly on the handshake URL /api/mcp
   if (req.method === 'POST') {
-    res.setHeader('Content-Type', 'application/json');
     const request = typeof req.body === 'string' ? JSON.parse(req.body) : req.body;
+
+    // JSON-RPC notifications and responses carry no `id`. The MCP Streamable
+    // HTTP transport requires the server to acknowledge these with HTTP 202 and
+    // an EMPTY body. Emitting a synthetic {jsonrpc,result:null} object (no id,
+    // no method) matches no JsonRpcMessage variant and is fatal to strict
+    // clients — e.g. Codex's Rust rmcp client dies with "data did not match any
+    // variant of untagged enum JsonRpcMessage, when send initialized
+    // notification". Lenient JS clients ignored the bogus body; rmcp does not.
+    if (request && typeof request.id === 'undefined') {
+      return res.status(202).end();
+    }
+
+    res.setHeader('Content-Type', 'application/json');
 
     // Stateless HTTP JSON-RPC handler (used by HTTP-only MCP clients).
     // Tools are listed and dispatched from the shared registry in
@@ -26,6 +39,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       const id = request?.id;
 
       if (method === 'initialize') {
+        // Advertise a session id so Streamable HTTP clients can attach it to
+        // subsequent requests. The handler is stateless and does not require
+        // it, but compliant clients expect the header on the initialize reply.
+        res.setHeader('Mcp-Session-Id', randomUUID());
         return res.status(200).json({
           jsonrpc: '2.0',
           id,
@@ -40,10 +57,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             }
           }
         });
-      }
-
-      if (method === 'notifications/initialized') {
-        return res.status(200).json({ jsonrpc: '2.0', result: null });
       }
 
       if (method === 'tools/list') {
