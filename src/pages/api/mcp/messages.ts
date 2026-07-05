@@ -1,13 +1,17 @@
 import { getTransport, transportCount } from '@/lib/mcp-state';
+import { resolveIdentity } from '@/lib/api-auth';
 import type { NextApiRequest, NextApiResponse } from 'next';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') return res.status(405).end();
 
-  // Validate API key; fail closed when FLUXION_API_KEY is not configured
-  const apiKey = process.env.FLUXION_API_KEY;
-  const providedKey = req.headers['x-api-key'] || req.query.token || req.query['api-key'];
-  if (!apiKey || providedKey !== apiKey) {
+  // Validate API key (shared or per-agent); fails closed when none is
+  // configured. Identity is NOT taken from this request — it was bound to
+  // the session at the SSE handshake, so a message POST cannot re-attribute
+  // an existing session.
+  const raw = req.headers['x-api-key'] || req.query.token || req.query['api-key'];
+  const providedKey = Array.isArray(raw) ? raw[0] : raw;
+  if (!resolveIdentity(providedKey).authorized) {
     return res.status(401).json({ error: 'Unauthorized: Invalid or missing API key' });
   }
 

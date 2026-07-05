@@ -1,16 +1,23 @@
 import { createMcpServer } from '@/lib/mcp';
 import { addTransport, removeTransport } from '@/lib/mcp-state';
 import { listToolSchemas, callTool } from '@/lib/mcp-tools';
+import { resolveIdentity } from '@/lib/api-auth';
 import { SSEServerTransport } from '@modelcontextprotocol/sdk/server/sse.js';
 import type { NextApiRequest, NextApiResponse } from 'next';
 import type { ServerResponse } from 'http';
 import { randomUUID } from 'node:crypto';
 
+function first(v: string | string[] | undefined): string | undefined {
+  return Array.isArray(v) ? v[0] : v;
+}
+
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
-  // Fail closed when FLUXION_API_KEY is not configured
-  const providedKey = req.headers['x-api-key'] || req.query.token || req.query['api-key'];
-  const apiKey = process.env.FLUXION_API_KEY;
-  if (!apiKey || providedKey !== apiKey) {
+  // Fail closed when no key is configured. Per-agent keys (FLX-133) resolve
+  // to an identity that is threaded into every tool call from this request;
+  // the legacy shared FLUXION_API_KEY authenticates without an identity.
+  const providedKey = first(req.headers['x-api-key'] as string | string[] | undefined) || first(req.query.token) || first(req.query['api-key']);
+  const auth = resolveIdentity(providedKey);
+  if (!auth.authorized) {
     return res.status(401).json({ error: 'Unauthorized: Invalid or missing API key' });
   }
 
@@ -68,7 +75,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       }
 
       if (method === 'tools/call') {
-        const result = await callTool(request.params?.name, request.params?.arguments);
+        const result = await callTool(request.params?.name, request.params?.arguments, { identity: auth.identity });
         return res.status(200).json({ jsonrpc: '2.0', id, result });
       }
 
@@ -99,7 +106,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   // transport, registered by sessionId. Concurrent clients coexist; a new
   // connection no longer tears down existing ones. The SDK appends
   // sessionId=<uuid> to the advertised messages endpoint automatically.
-  const server = createMcpServer();
+  // The identity resolved at the handshake is bound to the session for its
+  // lifetime — message POSTs authenticate but cannot re-attribute it.
+  const server = createMcpServer(auth.identity);
   const transport = new SSEServerTransport(`/api/mcp/messages?token=${providedKey || ''}`, res as unknown as ServerResponse);
   addTransport(transport);
 

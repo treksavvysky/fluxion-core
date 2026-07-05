@@ -22,12 +22,19 @@ export interface ToolResult {
   isError?: boolean;
 }
 
+// Per-call context threaded from the transports (FLX-133). `identity` is the
+// key-derived `<AgentName>@<hostname>` token when the caller authenticated
+// with a per-agent key; undefined for the legacy shared FLUXION_API_KEY.
+export interface ToolContext {
+  identity?: string;
+}
+
 /* eslint-disable @typescript-eslint/no-explicit-any */
 export interface ToolDef {
   name: string;
   description: string;
   inputSchema: Record<string, unknown>;
-  handler: (args: any) => Promise<ToolResult>;
+  handler: (args: any, ctx: ToolContext) => Promise<ToolResult>;
 }
 
 function text(t: string): ToolResult {
@@ -46,6 +53,30 @@ function revalidate(...paths: string[]) {
       // revalidation is best-effort outside a request scope
     }
   }
+}
+
+// Enforced attribution (FLX-133). When the caller authenticated with a
+// per-agent key, the key-derived identity is authoritative: a client value
+// must match it (exact, or prefixed like "Claude@host (autonomous)") or the
+// call is refused — impersonation is a hard error, not a warning. Legacy
+// shared-key callers keep the old trusted-client behavior.
+function stampedActor(clientValue: unknown, ctx: ToolContext, field: string): string | undefined {
+  const supplied = typeof clientValue === 'string' && clientValue.trim() ? clientValue.trim() : undefined;
+  if (!ctx.identity) return supplied;
+  if (supplied && supplied !== ctx.identity && !supplied.startsWith(`${ctx.identity} `)) {
+    throw new Error(`${field} "${supplied}" does not match your key-derived identity "${ctx.identity}". Omit ${field} (it is stamped from your API key) or pass your own identity — impersonation is refused.`);
+  }
+  return supplied ?? ctx.identity;
+}
+
+// Closes the actor gap on tools that carry no attribution field: when the
+// caller has a key-derived identity, mutations leave an audit trail entry.
+// Legacy shared-key callers produce no entry (pre-FLX-133 behavior).
+async function logActor(ctx: ToolContext, action: string, target: string) {
+  if (!ctx.identity) return;
+  await prisma.activityLog.create({
+    data: { actor: ctx.identity, actorIcon: 'bot', action, target },
+  });
 }
 
 // Resolves an issue by UUID or human identifier (FLX-112 / TRAIL-SYNC-3).
@@ -128,7 +159,7 @@ export const mcpTools: ToolDef[] = [
       },
       required: ['evidence']
     },
-    handler: async (args) => {
+    handler: async (args, ctx) => {
       const issue = await resolveIssue(args ?? {});
       if (!issue) throw new Error('Issue not found: provide a valid issueId or identifier');
       if (typeof args.criterionIndex !== 'number') throw new Error('Missing criterionIndex');
@@ -141,7 +172,7 @@ export const mcpTools: ToolDef[] = [
       if (!criterion) {
         throw new Error(`No criterion at index ${args.criterionIndex}. Checklist: ${criteria.map(c => `[${c.index}] ${c.text}`).join(' | ')}`);
       }
-      const attestor = (typeof args.attestor === 'string' && args.attestor.trim()) || 'agent';
+      const attestor = stampedActor(args.attestor, ctx, 'attestor') ?? 'agent';
 
       await prisma.criterionAttestation.upsert({
         where: { issueId_criterionHash: { issueId: issue.id, criterionHash: criterion.hash } },
@@ -323,7 +354,7 @@ export const mcpTools: ToolDef[] = [
       },
       required: ['issueId', 'status']
     },
-    handler: async (args) => {
+    handler: async (args, ctx) => {
       if (!args?.issueId || !args?.status) throw new Error('Missing args');
       const issue = await prisma.issue.findUnique({ where: { id: args.issueId } });
       if (!issue) throw new Error(`Issue not found for id: ${args.issueId}`);
@@ -332,6 +363,7 @@ export const mcpTools: ToolDef[] = [
         where: { id: args.issueId },
         data: { status: args.status }
       });
+      await logActor(ctx, `Updated status of ${updated.identifier}: ${issue.status} -> ${updated.status}`, updated.identifier);
       revalidate('/');
       return text(`Successfully updated issue ${updated.identifier} to ${updated.status}`);
     }
@@ -354,7 +386,7 @@ export const mcpTools: ToolDef[] = [
         parentIdentifier: { type: 'string', description: 'Identifier of the parent issue (e.g. FLX-117), or "none" to detach' }
       }
     },
-    handler: async (args) => {
+    handler: async (args, ctx) => {
       const issue = await resolveIssue(args ?? {});
       if (!issue) throw new Error('Issue not found: provide a valid issueId or identifier');
 
@@ -385,6 +417,7 @@ export const mcpTools: ToolDef[] = [
       }
 
       const updated = await prisma.issue.update({ where: { id: issue.id }, data });
+      await logActor(ctx, `Updated issue ${updated.identifier} (${Object.keys(data).join(', ')})`, updated.identifier);
       revalidate('/');
       return text(`Successfully updated issue ${updated.identifier} (${Object.keys(data).join(', ')})`);
     }
@@ -410,7 +443,7 @@ export const mcpTools: ToolDef[] = [
       },
       required: ['title']
     },
-    handler: async (args) => {
+    handler: async (args, ctx) => {
       if (!args?.title) throw new Error('Missing title');
       const newIssue = await createNamespacedIssue({
         title: args.title,
@@ -426,6 +459,7 @@ export const mcpTools: ToolDef[] = [
         productId: args.productId,
         productSlug: args.productSlug
       });
+      await logActor(ctx, `Created issue ${newIssue.identifier}: ${newIssue.title}`, newIssue.identifier);
       revalidate('/', '/cycles');
       return text(`Successfully created issue ${newIssue.identifier}: ${newIssue.title}`);
     }
@@ -987,17 +1021,21 @@ export const mcpTools: ToolDef[] = [
         description: { type: 'string', description: 'Detailed description of the change' },
         reason: { type: 'string', description: 'Why this change was made / rationale' },
         approvedBy: { type: 'string', description: 'Name of the human approver (e.g., George Loudon)' },
-        implementedBy: { type: 'string', description: 'Name of the runner (e.g., Antigravity or George Loudon)' },
+        implementedBy: { type: 'string', description: 'Name of the runner. Callers on a per-agent API key may omit this — it is stamped from the key-derived identity, and a mismatching value is refused.' },
         productId: { type: 'string', description: 'Optional UUID of the Product scope' },
         repoId: { type: 'string', description: 'Optional UUID of the Repository scope' },
         issueId: { type: 'string', description: 'Optional UUID of the associated Issue' },
         projectId: { type: 'string', description: 'Optional UUID of the Project scope (use with type "Decision" for project decision logs)' }
       },
-      required: ['type', 'description', 'approvedBy', 'implementedBy']
+      required: ['type', 'description', 'approvedBy']
     },
-    handler: async (args) => {
-      if (!args?.type || !args?.description || !args?.approvedBy || !args?.implementedBy) {
+    handler: async (args, ctx) => {
+      if (!args?.type || !args?.description || !args?.approvedBy) {
         throw new Error('Missing required change_log fields');
+      }
+      const implementedBy = stampedActor(args.implementedBy, ctx, 'implementedBy');
+      if (!implementedBy) {
+        throw new Error('Missing implementedBy (required for legacy shared-key callers; per-agent keys stamp it automatically)');
       }
       const log = await prisma.changeLog.create({
         data: {
@@ -1005,7 +1043,7 @@ export const mcpTools: ToolDef[] = [
           description: args.description,
           reason: args.reason || null,
           approvedBy: args.approvedBy,
-          implementedBy: args.implementedBy,
+          implementedBy,
           productId: args.productId || null,
           repoId: args.repoId || null,
           issueId: args.issueId || null,
@@ -1090,8 +1128,8 @@ export function listToolSchemas() {
   return mcpTools.map(({ name, description, inputSchema }) => ({ name, description, inputSchema }));
 }
 
-export async function callTool(name: string, args: unknown): Promise<ToolResult> {
+export async function callTool(name: string, args: unknown, ctx: ToolContext = {}): Promise<ToolResult> {
   const tool = mcpTools.find(t => t.name === name);
   if (!tool) throw new Error(`Tool not found: ${name}`);
-  return tool.handler(args ?? {});
+  return tool.handler(args ?? {}, ctx);
 }

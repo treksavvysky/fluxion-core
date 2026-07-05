@@ -380,6 +380,73 @@ check('refingerprint is idempotent for fixed updatedAt', JSON.parse(textOf(rf2))
 const rf3 = await call('refingerprint_pcp_packet', { content: JSON.stringify({ protocol: 'pcp' }) });
 check('refingerprint validates schema first', !!rf3.error && rf3.error.message.includes('missing required'), JSON.stringify(rf3.error ?? rf3));
 
+// --- 15. Per-agent key identity attribution (FLX-133) ---
+console.log('\n15. per-agent keys: server-stamped attribution');
+const agentRegistry = (() => { try { return JSON.parse(process.env.FLUXION_AGENT_KEYS ?? ''); } catch { return null; } })();
+if (!agentRegistry || Object.keys(agentRegistry).length === 0) {
+  check('FLUXION_AGENT_KEYS configured (skipping section 15)', false, 'set FLUXION_AGENT_KEYS to run identity attribution checks');
+} else {
+  const [agentIdentity, agentKey] = Object.entries(agentRegistry)[0];
+  const agentRpc = async (method, params) => {
+    const res = await fetch(`${BASE_URL}/api/mcp`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'x-api-key': agentKey },
+      body: JSON.stringify({ jsonrpc: '2.0', id: ++rpcId, method, params }),
+    });
+    return res.json();
+  };
+  const agentCall = (name, args) => agentRpc('tools/call', { name, arguments: args });
+
+  // unknown key still refused (fail closed preserved)
+  const badAuth = await fetch(`${BASE_URL}/api/mcp`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'x-api-key': 'not-a-real-key' },
+    body: JSON.stringify({ jsonrpc: '2.0', id: ++rpcId, method: 'tools/list' }),
+  });
+  check('unknown key rejected with 401', badAuth.status === 401);
+  const agentList = await agentRpc('tools/list');
+  check('agent key authenticates', (agentList?.result?.tools ?? []).length > 0);
+
+  // attestor is stamped from the key when omitted
+  const attIssue = await agentCall('create_issue', { title: '[SCRATCH] identity attestation target', status: 'In Progress', acceptanceCriteria: '- [ ] stamped' });
+  const attId = textOf(attIssue).match(/FLX-\d+/)?.[0];
+  await agentCall('check_criterion', { identifier: attId, criterionIndex: 0, evidence: 'identity stamping e2e' });
+  const attRow = await prisma.criterionAttestation.findFirst({ where: { issue: { identifier: attId } } });
+  check('omitted attestor stamped with key identity', attRow?.attestor === agentIdentity, `got "${attRow?.attestor}", want "${agentIdentity}"`);
+
+  // impersonation is refused; own identity (exact) accepted
+  const imp = await agentCall('check_criterion', { identifier: attId, criterionIndex: 0, evidence: 'x', attestor: 'George Loudon' });
+  check('mismatching attestor refused with identity named', !!imp.error && imp.error.message.includes(agentIdentity), JSON.stringify(imp.error ?? imp));
+  const own = await agentCall('check_criterion', { identifier: attId, criterionIndex: 0, evidence: 'explicit own identity', attestor: agentIdentity });
+  check('matching attestor accepted', textOf(own).includes('Attested'), JSON.stringify(own.error ?? ''));
+
+  // create_change_log: implementedBy stamped when omitted, impersonation refused
+  const cl = await agentCall('create_change_log', { type: 'Annotation', description: '[SCRATCH] identity stamp check', approvedBy: `${agentIdentity} (autonomous)` });
+  check('change log accepted without implementedBy', textOf(cl).includes('Successfully registered'), JSON.stringify(cl.error ?? ''));
+  const clRow = await prisma.changeLog.findFirst({ where: { description: '[SCRATCH] identity stamp check' } });
+  check('implementedBy stamped with key identity', clRow?.implementedBy === agentIdentity, `got "${clRow?.implementedBy}"`);
+  const clImp = await agentCall('create_change_log', { type: 'Annotation', description: '[SCRATCH] impersonation', approvedBy: 'x', implementedBy: 'Codex@somewhere-else' });
+  check('mismatching implementedBy refused', !!clImp.error && clImp.error.message.includes('impersonation is refused'), JSON.stringify(clImp.error ?? clImp));
+
+  // actor gap closed: identity-keyed create/update leave an audit trail
+  const acts = await prisma.activityLog.findMany({ where: { target: attId, actor: agentIdentity } });
+  check('create_issue left identity-attributed activity entry', acts.some((a) => a.action.startsWith('Created issue')), JSON.stringify(acts.map((a) => a.action)));
+  await agentCall('update_status', { issueId: attRow.issueId, status: 'Done' });
+  const acts2 = await prisma.activityLog.findMany({ where: { target: attId, actor: agentIdentity } });
+  check('update_status left identity-attributed activity entry', acts2.some((a) => a.action.includes('-> Done')), JSON.stringify(acts2.map((a) => a.action)));
+
+  // legacy shared key: behavior unchanged (free-text attestor still trusted)
+  const legacyIssue = await call('create_issue', { title: '[SCRATCH] legacy key target', status: 'In Progress', acceptanceCriteria: '- [ ] legacy' });
+  const legacyId = textOf(legacyIssue).match(/FLX-\d+/)?.[0];
+  const legacyAtt = await call('check_criterion', { identifier: legacyId, criterionIndex: 0, evidence: 'legacy path', attestor: 'suite' });
+  check('legacy key keeps trusted free-text attestor', textOf(legacyAtt).includes('Attested'), JSON.stringify(legacyAtt.error ?? ''));
+  const legacyActs = await prisma.activityLog.findMany({ where: { target: legacyId ?? '' } });
+  check('legacy key writes no actor-gap entries', !legacyActs.some((a) => a.action.startsWith('Created issue')), JSON.stringify(legacyActs.map((a) => a.action)));
+
+  await prisma.issue.deleteMany({ where: { identifier: { in: [attId, legacyId].filter(Boolean) } } });
+  await prisma.activityLog.deleteMany({ where: { target: { in: [attId, legacyId].filter(Boolean) } } });
+}
+
 // --- Cleanup ---
 await prisma.issue.deleteMany({ where: { identifier: { in: [scratchId, childId, parentId2].filter(Boolean) } } });
 await prisma.document.deleteMany({ where: { title: { startsWith: '[SCRATCH]' } } });
