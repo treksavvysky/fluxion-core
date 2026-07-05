@@ -9,6 +9,7 @@ import { isValidProductStatus, VALID_PRODUCT_STATUSES } from './products';
 import { isValidProjectStatus, mintProjectSlug, allowedNextProjectStatuses } from './projects';
 import { hydrateIssueContext } from './fionn/hydrator';
 import { parsePcpPacket, verifyFingerprint, refingerprintPacket, serializePacketFile, renderPcpBriefing } from './pcp';
+import { updateRepository } from './repositories';
 import { revalidatePath } from 'next/cache';
 
 // Single source of truth for the MCP tool surface. Both servers — the SSE
@@ -1076,6 +1077,29 @@ export const mcpTools: ToolDef[] = [
         results.activities = await prisma.activityLog.findMany({ orderBy: { createdAt: 'desc' }, take: 10 });
       }
       return json(results);
+    }
+  },
+  {
+    name: 'update_repository',
+    description: 'Update a repository record: name, url, or product assignment (records are registered in stages, so these legitimately change after creation). Identify by UUID or unambiguous name. Pass "none" as url or productId/productSlug to detach. Consider recording significant changes (re-homing, renames) in change control with repoId scope.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        repoId: { type: 'string', description: 'The UUID of the repository' },
+        repoName: { type: 'string', description: 'The repository name (must match exactly one record), as an alternative to repoId' },
+        name: { type: 'string', description: 'New repository name' },
+        url: { type: 'string', description: 'New URL (e.g. GitHub URL), or "none" to clear it' },
+        productId: { type: 'string', description: 'UUID of the owning product, or "none" to detach' },
+        productSlug: { type: 'string', description: 'Product slug (e.g. FLX) as an alternative to productId' }
+      }
+    },
+    handler: async (args) => {
+      const { updated, changed } = await updateRepository(
+        { repoId: args?.repoId, repoName: args?.repoName },
+        { name: args?.name, url: args?.url, productId: args?.productId, productSlug: args?.productSlug },
+      );
+      revalidate('/repositories');
+      return text(`Successfully updated repository ${updated.name} (${changed.join(', ')}) — url: ${updated.url ?? 'none'}, productId: ${updated.productId ?? 'none'}`);
     }
   },
   {

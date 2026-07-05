@@ -35,8 +35,8 @@ const textOf = (r) => r?.result?.content?.[0]?.text ?? '';
 console.log('1. tools/list (HTTP surface, previously drifted to 13 tools)');
 const list = await rpc('tools/list');
 const names = (list?.result?.tools ?? []).map((t) => t.name);
-check('34 tools listed', names.length === 34, `got ${names.length}: ${names.join(', ')}`);
-for (const t of ['update_issue', 'search', 'read_product_metrics', 'archive_product', 'read_document', 'write_document', 'create_change_log', 'query_telemetry', 'read_issue', 'read_project', 'read_governing_context', 'hydrate_issue_context', 'decompose_issue', 'check_criterion', 'read_cycle', 'create_cycle', 'update_cycle_status', 'update_project_status', 'brief_pcp_packet', 'refingerprint_pcp_packet', 'read_product_commits']) {
+check('35 tools listed', names.length === 35, `got ${names.length}: ${names.join(', ')}`);
+for (const t of ['update_issue', 'search', 'read_product_metrics', 'archive_product', 'read_document', 'write_document', 'create_change_log', 'query_telemetry', 'read_issue', 'read_project', 'read_governing_context', 'hydrate_issue_context', 'decompose_issue', 'check_criterion', 'read_cycle', 'create_cycle', 'update_cycle_status', 'update_project_status', 'brief_pcp_packet', 'refingerprint_pcp_packet', 'read_product_commits', 'update_repository']) {
   check(`${t} present`, names.includes(t));
 }
 
@@ -499,6 +499,47 @@ console.log('\n16. push ingest + pathFilter routing');
   await prisma.commit.deleteMany({ where: { repoId: { in: [monoRepo.id, soloRepo.id] } } });
   await prisma.repository.deleteMany({ where: { id: { in: [monoRepo.id, soloRepo.id] } } });
   await prisma.product.deleteMany({ where: { id: { in: [prodA.id, prodB.id] } } });
+}
+
+// --- 17. update_repository (FLX-136) ---
+console.log('\n17. update_repository');
+{
+  const prodX = await prisma.product.create({ data: { slug: `SCR-UR-${Date.now()}`, name: '[SCRATCH] Repo Home' } });
+  const repoName = `scratch-mutable-${Date.now()}`;
+  await call('create_repository', { name: repoName });
+  const created = await prisma.repository.findFirst({ where: { name: repoName } });
+  check('scratch repo created without url/product', created && created.url === null && created.productId === null);
+
+  // backfill url + re-home by unambiguous name (the fionn_ai scenario)
+  const u1 = await call('update_repository', { repoName, url: 'https://example.test/mutable', productSlug: prodX.slug });
+  check('update by name backfills url + product', textOf(u1).includes('url, productId') || (textOf(u1).includes('url') && textOf(u1).includes('productId')), JSON.stringify(u1.error ?? u1));
+  const afterU1 = await prisma.repository.findUnique({ where: { id: created.id } });
+  check('url and product persisted', afterU1?.url === 'https://example.test/mutable' && afterU1?.productId === prodX.id);
+
+  // rename by UUID, detach product and clear url with the "none" sentinel
+  const u2 = await call('update_repository', { repoId: created.id, name: `${repoName}-renamed`, url: 'none', productId: 'none' });
+  check('rename + detach via none sentinels', !u2.error, JSON.stringify(u2.error ?? ''));
+  const afterU2 = await prisma.repository.findUnique({ where: { id: created.id } });
+  check('rename/detach persisted', afterU2?.name === `${repoName}-renamed` && afterU2?.url === null && afterU2?.productId === null);
+
+  // error surface
+  const e1 = await call('update_repository', { repoId: 'nope-123', name: 'x' });
+  check('unknown repoId rejected', !!e1.error && e1.error.message.includes('not found'), JSON.stringify(e1.error ?? e1));
+  const e2 = await call('update_repository', { repoName: `${repoName}-renamed`, productId: 'nope-456' });
+  check('unknown productId rejected', !!e2.error && e2.error.message.includes('Product not found'), JSON.stringify(e2.error ?? e2));
+  const e3 = await call('update_repository', { repoId: created.id });
+  check('no-fields call rejected', !!e3.error && e3.error.message.includes('No updatable fields'));
+  const e4 = await call('update_repository', { name: 'x' });
+  check('missing identifier rejected', !!e4.error && e4.error.message.includes('repoId or repoName'));
+
+  // ambiguous name refused
+  const twinA = await prisma.repository.create({ data: { name: `scratch-twin-${Date.now()}` } });
+  const twinB = await prisma.repository.create({ data: { name: twinA.name.toUpperCase() } });
+  const e5 = await call('update_repository', { repoName: twinA.name, url: 'https://x' });
+  check('ambiguous name refused with candidates listed', !!e5.error && e5.error.message.includes('ambiguous'), JSON.stringify(e5.error ?? e5));
+
+  await prisma.repository.deleteMany({ where: { id: { in: [created.id, twinA.id, twinB.id] } } });
+  await prisma.product.delete({ where: { id: prodX.id } });
 }
 
 // --- Cleanup ---
