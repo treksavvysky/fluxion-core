@@ -8,6 +8,7 @@ import { upsertDocument } from './documents';
 import { isValidProductStatus, VALID_PRODUCT_STATUSES } from './products';
 import { isValidProjectStatus, mintProjectSlug, allowedNextProjectStatuses } from './projects';
 import { hydrateIssueContext } from './fionn/hydrator';
+import { parsePcpPacket, verifyFingerprint, refingerprintPacket, serializePacketFile, renderPcpBriefing } from './pcp';
 import { revalidatePath } from 'next/cache';
 
 // Single source of truth for the MCP tool surface. Both servers — the SSE
@@ -1037,6 +1038,50 @@ export const mcpTools: ToolDef[] = [
         results.activities = await prisma.activityLog.findMany({ orderBy: { createdAt: 'desc' }, take: 10 });
       }
       return json(results);
+    }
+  },
+  {
+    name: 'brief_pcp_packet',
+    description: 'PCP Git Branch Handoff (launch stage): validate the raw content of a repository\'s pcp/context.json against the PCP v0.2 packet schema, verify its SHA-256 fingerprint, and return a read-only briefing markdown block to inject into the executing agent\'s prompt. Fluxion never reads repositories itself — the caller reads the file from its own clone and passes the content here.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        content: { type: 'string', description: 'The raw text content of pcp/context.json, exactly as read from the repository' }
+      },
+      required: ['content']
+    },
+    handler: async (args) => {
+      if (!args?.content || typeof args.content !== 'string') throw new Error('Missing content: pass the raw text of pcp/context.json');
+      const packet = parsePcpPacket(args.content);
+      const check = verifyFingerprint(packet);
+      if (!check.valid) {
+        throw new Error(`PCP fingerprint mismatch: packet declares "${check.found}" but canonical content hashes to "${check.expected}". The packet was edited without re-fingerprinting — refuse the briefing and run refingerprint_pcp_packet (or pcp/tools/validate.py) first.`);
+      }
+      return text(renderPcpBriefing(packet));
+    }
+  },
+  {
+    name: 'refingerprint_pcp_packet',
+    description: 'PCP Git Branch Handoff (finalization stage): validate an updated pcp/context.json packet, recompute its SHA-256 fingerprint (and stamp updated_at), and return the exact file content to write back. The caller writes the file into its local clone and commits it to the active feature branch for human PR review — Fluxion never touches the repository.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        content: { type: 'string', description: 'The updated packet JSON as raw text (fingerprint may be stale; it will be recomputed)' },
+        updatedAt: { type: 'string', description: 'ISO 8601 timestamp for updated_at (default: server time now)' }
+      },
+      required: ['content']
+    },
+    handler: async (args) => {
+      if (!args?.content || typeof args.content !== 'string') throw new Error('Missing content: pass the updated packet JSON as raw text');
+      const packet = parsePcpPacket(args.content);
+      const updatedAt = (typeof args.updatedAt === 'string' && args.updatedAt.trim()) || new Date().toISOString();
+      const next = refingerprintPacket(packet, updatedAt);
+      return json({
+        fingerprint: next.fingerprint,
+        updated_at: next.updated_at,
+        instructions: 'Write fileContent verbatim to pcp/context.json in your local clone, then commit it to the active feature branch (never main/master) for PR review.',
+        fileContent: serializePacketFile(next),
+      });
     }
   }
 ];

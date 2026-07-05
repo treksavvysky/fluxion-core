@@ -35,8 +35,8 @@ const textOf = (r) => r?.result?.content?.[0]?.text ?? '';
 console.log('1. tools/list (HTTP surface, previously drifted to 13 tools)');
 const list = await rpc('tools/list');
 const names = (list?.result?.tools ?? []).map((t) => t.name);
-check('31 tools listed', names.length === 31, `got ${names.length}: ${names.join(', ')}`);
-for (const t of ['update_issue', 'search', 'read_product_metrics', 'archive_product', 'read_document', 'write_document', 'create_change_log', 'query_telemetry', 'read_issue', 'read_project', 'read_governing_context', 'hydrate_issue_context', 'decompose_issue', 'check_criterion', 'read_cycle', 'create_cycle', 'update_cycle_status', 'update_project_status']) {
+check('33 tools listed', names.length === 33, `got ${names.length}: ${names.join(', ')}`);
+for (const t of ['update_issue', 'search', 'read_product_metrics', 'archive_product', 'read_document', 'write_document', 'create_change_log', 'query_telemetry', 'read_issue', 'read_project', 'read_governing_context', 'hydrate_issue_context', 'decompose_issue', 'check_criterion', 'read_cycle', 'create_cycle', 'update_cycle_status', 'update_project_status', 'brief_pcp_packet', 'refingerprint_pcp_packet']) {
   check(`${t} present`, names.includes(t));
 }
 
@@ -349,6 +349,36 @@ if (c1res) {
   // cleanup cycle
   await prisma.cycle.delete({ where: { slug: c1res } });
 }
+
+// --- 14. PCP v0.2 Git Branch Handoff tools (FLX-134) ---
+console.log('\n14. brief_pcp_packet + refingerprint_pcp_packet');
+// Non-ASCII content pins ensure_ascii parity with pcp-server's validate.py;
+// the fingerprint constant below was computed by the Python reference.
+const pcpPacket = {
+  protocol: 'pcp', name: 'Project Context Protocol', version: '0.2.0', packet_type: 'project_context',
+  project: { name: 'törture — café ✅ 🚀', purpose: 'quotes " backslash \\ newline \n tab \t del \x7f' },
+  current_objective: { title: 'ünïcode', definition_of_done: ['emoji 🎯', 'plain'] },
+  fingerprint: '53fd20db4adfc61ed86656d6afe081716cbd4c4ee1fa5ed0d8a3877202d384de',
+};
+const pb1 = await call('brief_pcp_packet', { content: JSON.stringify(pcpPacket) });
+check('valid packet briefs (fingerprint parity with validate.py)', textOf(pb1).startsWith('# PCP Briefing —') && textOf(pb1).includes('ünïcode'), JSON.stringify(pb1.error ?? '').slice(0, 300));
+const pb2 = await call('brief_pcp_packet', { content: JSON.stringify({ ...pcpPacket, fingerprint: 'deadbeef' }) });
+check('tampered fingerprint refused', !!pb2.error && pb2.error.message.includes('fingerprint mismatch'), JSON.stringify(pb2.error ?? pb2));
+const pb3 = await call('brief_pcp_packet', { content: JSON.stringify({ ...pcpPacket, rogue_field: true }) });
+check('schema violation refused (additionalProperties)', !!pb3.error && pb3.error.message.includes('rogue_field'), JSON.stringify(pb3.error ?? pb3));
+const pb4 = await call('brief_pcp_packet', { content: '{not json' });
+check('malformed JSON refused', !!pb4.error && pb4.error.message.includes('not valid JSON'));
+
+const updated = { ...pcpPacket, evaluation: { status: 'completed', reason: 'objective shipped' } };
+const rf1 = await call('refingerprint_pcp_packet', { content: JSON.stringify(updated), updatedAt: '2026-07-05T00:00:00Z' });
+const rf1res = JSON.parse(textOf(rf1));
+check('refingerprint returns new fingerprint + updated_at + file content', rf1res.fingerprint?.length === 64 && rf1res.fingerprint !== pcpPacket.fingerprint && rf1res.updated_at === '2026-07-05T00:00:00Z' && rf1res.fileContent?.endsWith('\n'), textOf(rf1).slice(0, 200));
+const pb5 = await call('brief_pcp_packet', { content: rf1res.fileContent });
+check('refingerprinted file content round-trips through brief', textOf(pb5).includes('Status: completed'), JSON.stringify(pb5.error ?? '').slice(0, 300));
+const rf2 = await call('refingerprint_pcp_packet', { content: rf1res.fileContent, updatedAt: '2026-07-05T00:00:00Z' });
+check('refingerprint is idempotent for fixed updatedAt', JSON.parse(textOf(rf2)).fingerprint === rf1res.fingerprint);
+const rf3 = await call('refingerprint_pcp_packet', { content: JSON.stringify({ protocol: 'pcp' }) });
+check('refingerprint validates schema first', !!rf3.error && rf3.error.message.includes('missing required'), JSON.stringify(rf3.error ?? rf3));
 
 // --- Cleanup ---
 await prisma.issue.deleteMany({ where: { identifier: { in: [scratchId, childId, parentId2].filter(Boolean) } } });

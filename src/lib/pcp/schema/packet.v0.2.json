@@ -1,0 +1,74 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "PCP Packet v0.2",
+  "type": "object",
+  "required": ["protocol", "name", "version", "packet_type", "project", "current_objective"],
+  "properties": {
+    "protocol": { "type": "string", "const": "pcp" },
+    "name": { "type": "string", "const": "Project Context Protocol" },
+    "version": { "type": "string" },
+    "packet_type": { "type": "string", "const": "project_context" },
+    "project": {
+      "type": "object",
+      "required": ["name", "purpose"],
+      "properties": {
+        "name": { "type": "string" },
+        "purpose": { "type": "string" }
+      },
+      "additionalProperties": false
+    },
+    "current_objective": {
+      "type": "object",
+      "required": ["title", "definition_of_done"],
+      "properties": {
+        "title": { "type": "string" },
+        "definition_of_done": {
+          "type": "array",
+          "items": { "type": "string" }
+        }
+      },
+      "additionalProperties": false
+    },
+    "constraints": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "context_notes": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "evaluation": {
+      "type": "object",
+      "required": ["status", "reason"],
+      "properties": {
+        "status": { "type": "string" },
+        "reason": { "type": "string" }
+      },
+      "additionalProperties": false
+    },
+    "architecture_decision": {
+      "type": "object",
+      "required": ["decision", "rationale"],
+      "properties": {
+        "decision": { "type": "string" },
+        "rationale": { "type": "string" },
+        "possible_future_forms": {
+          "type": "array",
+          "items": { "type": "string" }
+        }
+      },
+      "additionalProperties": false
+    },
+    "definition_of_done": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "builds_toward": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "fingerprint": { "type": "string" },
+    "updated_at": { "type": "string" }
+  },
+  "additionalProperties": false
+}
