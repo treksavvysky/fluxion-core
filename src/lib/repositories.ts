@@ -76,3 +76,21 @@ export async function updateRepository(ref: RepositoryRef, updates: RepositoryUp
   const updated = await prisma.repository.update({ where: { id: repo.id }, data });
   return { previous: repo, updated, changed: Object.keys(data) };
 }
+
+// Soft-delete (FLX-137), following the archive_product pattern: idempotent,
+// history untouched (issues, commits, change logs stay linked and queryable),
+// restorable. There is deliberately no destructive delete path anywhere.
+// Webhook auto-registration matches archived records by name so a signal
+// never creates a duplicate active record — but it never unarchives either;
+// retirement is an operator decision that telemetry must not silently reverse.
+export async function archiveRepository(ref: RepositoryRef, restore = false) {
+  const repo = await resolveRepository(ref);
+  if (restore) {
+    if (!repo.archivedAt) return { repo, already: true };
+    const updated = await prisma.repository.update({ where: { id: repo.id }, data: { archivedAt: null } });
+    return { repo: updated, already: false };
+  }
+  if (repo.archivedAt) return { repo, already: true };
+  const updated = await prisma.repository.update({ where: { id: repo.id }, data: { archivedAt: new Date() } });
+  return { repo: updated, already: false };
+}

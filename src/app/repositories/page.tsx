@@ -6,14 +6,16 @@ import Link from 'next/link';
 import RepositoryRow from '@/components/RepositoryRow';
 import NewRepositoryModal from '@/components/NewRepositoryModal';
 
-export default async function RepositoriesPage({ searchParams }: { searchParams: Promise<{ new?: string }> }) {
+export default async function RepositoriesPage({ searchParams }: { searchParams: Promise<{ new?: string; archived?: string }> }) {
   const params = await searchParams;
   const isNewOpen = params?.new === 'true';
+  const showArchived = params?.archived === 'true';
 
   const [repos, products] = await Promise.all([
-    getRepositories(),
+    getRepositories(showArchived),
     prisma.product.findMany({ orderBy: { name: 'asc' }, select: { id: true, name: true } }),
   ]);
+  const archivedCount = repos.filter((r) => r.archivedAt).length;
 
   return (
     <>
@@ -27,6 +29,12 @@ export default async function RepositoriesPage({ searchParams }: { searchParams:
             <span className={styles.badge}>{repos.length}</span>
           </div>
           <div className={styles.actions}>
+            <Link
+              href={showArchived ? '/repositories' : '/repositories?archived=true'}
+              style={{ color: 'var(--text-muted)', fontSize: '13px', alignSelf: 'center', marginRight: '12px' }}
+            >
+              {showArchived ? `Hide archived${archivedCount ? ` (${archivedCount})` : ''}` : 'Show archived'}
+            </Link>
             <Link href="/repositories?new=true">
               <button className={`${styles.btn} ${styles.btnPrimary}`}>
                 <Plus size={14} /> New Repository
@@ -58,6 +66,7 @@ export default async function RepositoriesPage({ searchParams }: { searchParams:
                   productId: r.productId,
                   productName: r.product?.name ?? null,
                   issueCount: r._count.issues,
+                  archived: r.archivedAt !== null,
                 }}
                 products={products}
               />

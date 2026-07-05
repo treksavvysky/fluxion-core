@@ -206,7 +206,7 @@ export default async function DocsPage({ searchParams }: { searchParams: Promise
 
   // Query databases for relations scope select options
   const products = await prisma.product.findMany({ select: { id: true, name: true } });
-  const repos = await prisma.repository.findMany({ select: { id: true, name: true } });
+  const repos = await prisma.repository.findMany({ where: { archivedAt: null }, select: { id: true, name: true } });
   const projects = await prisma.project.findMany({ select: { id: true, name: true } });
 
   const onCloseUrl = activeDoc ? `/docs?slug=${activeDoc.slug}` : '/docs';

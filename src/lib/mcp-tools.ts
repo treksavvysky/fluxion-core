@@ -9,7 +9,7 @@ import { isValidProductStatus, VALID_PRODUCT_STATUSES } from './products';
 import { isValidProjectStatus, mintProjectSlug, allowedNextProjectStatuses } from './projects';
 import { hydrateIssueContext } from './fionn/hydrator';
 import { parsePcpPacket, verifyFingerprint, refingerprintPacket, serializePacketFile, renderPcpBriefing } from './pcp';
-import { updateRepository } from './repositories';
+import { updateRepository, archiveRepository } from './repositories';
 import { revalidatePath } from 'next/cache';
 
 // Single source of truth for the MCP tool surface. Both servers — the SSE
@@ -883,10 +883,16 @@ export const mcpTools: ToolDef[] = [
   },
   {
     name: 'read_repositories',
-    description: 'Read the list of codebase repositories.',
-    inputSchema: { type: 'object', properties: {} },
-    handler: async () => {
+    description: 'Read the list of codebase repositories. Archived (soft-deleted) records are excluded unless includeArchived is true.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        includeArchived: { type: 'boolean', description: 'Include archived repositories (default false)' }
+      }
+    },
+    handler: async (args) => {
       const repos = await prisma.repository.findMany({
+        where: args?.includeArchived ? undefined : { archivedAt: null },
         orderBy: { createdAt: 'desc' },
         include: {
           product: { select: { name: true } },
@@ -894,6 +900,26 @@ export const mcpTools: ToolDef[] = [
         }
       });
       return json(repos);
+    }
+  },
+  {
+    name: 'archive_repository',
+    description: 'Archive (soft-delete) a repository record, or restore it with restore=true. Idempotent; archived records keep all linked history (issues, commits, change logs) and are excluded from listings by default. There is no destructive delete. Webhook signals naming an archived repo still match it (no duplicate is created) but never unarchive it.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        repoId: { type: 'string', description: 'The UUID of the repository' },
+        repoName: { type: 'string', description: 'The repository name (must match exactly one record), as an alternative to repoId' },
+        restore: { type: 'boolean', description: 'Restore an archived repository instead of archiving (default false)' }
+      }
+    },
+    handler: async (args) => {
+      const { repo, already } = await archiveRepository({ repoId: args?.repoId, repoName: args?.repoName }, args?.restore === true);
+      revalidate('/repositories');
+      if (args?.restore === true) {
+        return text(already ? `Repository ${repo.name} is not archived — nothing to restore` : `Successfully restored repository ${repo.name}`);
+      }
+      return text(already ? `Repository ${repo.name} is already archived` : `Successfully archived repository ${repo.name} (history preserved; restore with restore=true)`);
     }
   },
   {

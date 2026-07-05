@@ -12,6 +12,7 @@ interface RepoView {
   productId: string | null;
   productName: string | null;
   issueCount: number;
+  archived?: boolean;
 }
 
 const inputStyle: React.CSSProperties = {
@@ -84,11 +85,14 @@ export default function RepositoryRow({ repo, products }: { repo: RepoView; prod
     );
   }
 
+  // Archived rows render read-only (FLX-137): restore via the
+  // archive_repository MCP tool, not casual dashboard edits.
   return (
-    <div className={styles.issueRow}>
+    <div className={styles.issueRow} style={repo.archived ? { opacity: 0.55 } : undefined}>
       <div className={`${styles.colTitle} ${styles.issueTitle}`} style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
         <GitBranch size={14} color="#f97316" style={{ flexShrink: 0 }} />
         {repo.name}
+        {repo.archived && <span className={styles.statusBadge} style={{ fontSize: '10px' }}>Archived</span>}
         {repo.url ? (
           <a href={repo.url} target="_blank" rel="noopener noreferrer" style={{ color: 'var(--text-muted)', fontSize: '12px', fontWeight: 'normal', display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
             {repo.url} <ExternalLink size={11} />
@@ -102,9 +106,11 @@ export default function RepositoryRow({ repo, products }: { repo: RepoView; prod
       </div>
       <div className={styles.colPriority} style={{ color: 'var(--text-muted)', fontSize: '13px', display: 'flex', gap: '10px', alignItems: 'center' }}>
         {repo.issueCount} issues
-        <button onClick={() => setEditing(true)} title="Edit repository" style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', padding: '4px' }}>
-          <Pencil size={13} />
-        </button>
+        {!repo.archived && (
+          <button onClick={() => setEditing(true)} title="Edit repository" style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', padding: '4px' }}>
+            <Pencil size={13} />
+          </button>
+        )}
       </div>
     </div>
   );

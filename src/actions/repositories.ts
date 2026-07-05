@@ -4,8 +4,11 @@ import { prisma } from '@/lib/prisma';
 import { revalidatePath } from 'next/cache';
 import { updateRepository, type RepositoryUpdates } from '@/lib/repositories';
 
-export async function getRepositories() {
+// Archived (soft-deleted) records are excluded by default (FLX-137) — the
+// dashboard list and pickers only see live repositories unless asked.
+export async function getRepositories(includeArchived = false) {
   return prisma.repository.findMany({
+    where: includeArchived ? undefined : { archivedAt: null },
     orderBy: { name: 'asc' },
     include: {
       product: { select: { name: true, slug: true } },

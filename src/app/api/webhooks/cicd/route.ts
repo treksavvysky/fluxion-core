@@ -26,7 +26,10 @@ export async function POST(req: Request) {
         }
     });
 
-    // Find or dynamically register the corresponding Code Repository
+    // Find or dynamically register the corresponding Code Repository.
+    // Deliberately matches archived records too (FLX-137): a signal naming
+    // an archived repo must not create a duplicate active record, and must
+    // not silently unarchive — retirement is an operator decision.
     let repo = null;
     if (body.service) {
         repo = await prisma.repository.findFirst({

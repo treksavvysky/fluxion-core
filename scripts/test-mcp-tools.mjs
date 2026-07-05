@@ -35,8 +35,8 @@ const textOf = (r) => r?.result?.content?.[0]?.text ?? '';
 console.log('1. tools/list (HTTP surface, previously drifted to 13 tools)');
 const list = await rpc('tools/list');
 const names = (list?.result?.tools ?? []).map((t) => t.name);
-check('35 tools listed', names.length === 35, `got ${names.length}: ${names.join(', ')}`);
-for (const t of ['update_issue', 'search', 'read_product_metrics', 'archive_product', 'read_document', 'write_document', 'create_change_log', 'query_telemetry', 'read_issue', 'read_project', 'read_governing_context', 'hydrate_issue_context', 'decompose_issue', 'check_criterion', 'read_cycle', 'create_cycle', 'update_cycle_status', 'update_project_status', 'brief_pcp_packet', 'refingerprint_pcp_packet', 'read_product_commits', 'update_repository']) {
+check('36 tools listed', names.length === 36, `got ${names.length}: ${names.join(', ')}`);
+for (const t of ['update_issue', 'search', 'read_product_metrics', 'archive_product', 'read_document', 'write_document', 'create_change_log', 'query_telemetry', 'read_issue', 'read_project', 'read_governing_context', 'hydrate_issue_context', 'decompose_issue', 'check_criterion', 'read_cycle', 'create_cycle', 'update_cycle_status', 'update_project_status', 'brief_pcp_packet', 'refingerprint_pcp_packet', 'read_product_commits', 'update_repository', 'archive_repository']) {
   check(`${t} present`, names.includes(t));
 }
 
@@ -540,6 +540,55 @@ console.log('\n17. update_repository');
 
   await prisma.repository.deleteMany({ where: { id: { in: [created.id, twinA.id, twinB.id] } } });
   await prisma.product.delete({ where: { id: prodX.id } });
+}
+
+// --- 18. archive_repository soft-delete (FLX-137) ---
+console.log('\n18. archive_repository: soft-delete, restore, exclusion, webhook behavior');
+{
+  const arcName = `scratch-arc-${Date.now()}`;
+  await call('create_repository', { name: arcName });
+  const arcRepo = await prisma.repository.findFirst({ where: { name: arcName } });
+  // give it history: one linked issue
+  const histIssue = await call('create_issue', { title: '[SCRATCH] archived repo history' });
+  const histId = textOf(histIssue).match(/FLX-\d+/)?.[0];
+  const histRow = await prisma.issue.findUnique({ where: { identifier: histId } });
+  await prisma.issue.update({ where: { id: histRow.id }, data: { repoId: arcRepo.id } });
+
+  const a1 = await call('archive_repository', { repoName: arcName });
+  check('archive by name', textOf(a1).includes('Successfully archived'), JSON.stringify(a1.error ?? a1));
+  const a2 = await call('archive_repository', { repoId: arcRepo.id });
+  check('idempotent re-archive distinct message', textOf(a2).includes('already archived'), textOf(a2));
+
+  const listDefault = JSON.parse(textOf(await call('read_repositories', {})));
+  check('archived excluded from default listing', !listDefault.some((r) => r.id === arcRepo.id));
+  const listAll = JSON.parse(textOf(await call('read_repositories', { includeArchived: true })));
+  check('includeArchived lists it with archivedAt set', listAll.some((r) => r.id === arcRepo.id && r.archivedAt !== null));
+
+  // history preserved and queryable
+  const stillLinked = await prisma.issue.findUnique({ where: { id: histRow.id }, include: { repo: true } });
+  check('linked issue history intact after archive', stillLinked?.repo?.id === arcRepo.id && stillLinked.repo.archivedAt !== null);
+
+  // webhook signals on an archived repo: match, no duplicate, no resurrect
+  const pushRes = await fetch(`${BASE_URL}/api/webhooks/push?token=${API_KEY}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ repoName: arcName, branch: 'master', commits: [{ sha: 'arc111', message: 'signal on archived', paths: ['a.ts'] }] }),
+  }).then((r) => r.json());
+  const sameNameCount = await prisma.repository.count({ where: { name: { equals: arcName, mode: 'insensitive' } } });
+  const afterPush = await prisma.repository.findUnique({ where: { id: arcRepo.id } });
+  check('push on archived repo records commit without duplicate record', pushRes.recorded?.length === 1 && sameNameCount === 1, JSON.stringify(pushRes).slice(0, 150));
+  check('push does not silently unarchive', afterPush?.archivedAt !== null);
+
+  const r1 = await call('archive_repository', { repoName: arcName, restore: true });
+  check('restore works', textOf(r1).includes('Successfully restored'), textOf(r1));
+  const r2 = await call('archive_repository', { repoName: arcName, restore: true });
+  check('idempotent re-restore distinct message', textOf(r2).includes('nothing to restore'), textOf(r2));
+  const backDefault = JSON.parse(textOf(await call('read_repositories', {})));
+  check('restored repo back in default listing', backDefault.some((r) => r.id === arcRepo.id));
+
+  await prisma.issue.deleteMany({ where: { id: histRow.id } });
+  await prisma.commit.deleteMany({ where: { repoId: arcRepo.id } });
+  await prisma.repository.delete({ where: { id: arcRepo.id } });
 }
 
 // --- Cleanup ---

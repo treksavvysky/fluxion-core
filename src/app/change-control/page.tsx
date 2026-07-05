@@ -23,7 +23,7 @@ export default async function ChangeControlPage({ searchParams }: { searchParams
 
   // Fetch scope records for the new log form modal
   const products = await prisma.product.findMany({ select: { id: true, name: true } });
-  const repos = await prisma.repository.findMany({ select: { id: true, name: true } });
+  const repos = await prisma.repository.findMany({ where: { archivedAt: null }, select: { id: true, name: true } });
   const issues = await prisma.issue.findMany({ select: { id: true, title: true, identifier: true } });
 
   return (

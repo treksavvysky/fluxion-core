@@ -111,6 +111,9 @@ export async function ingestPush(payload: PushPayload): Promise<IngestSummary> {
     throw new Error('Push payload carries no commits');
   }
 
+  // Matches archived records too (FLX-137): a push naming an archived repo
+  // must not create a duplicate active record, and must not silently
+  // unarchive it — commits still land against the archived record.
   let repo = await prisma.repository.findFirst({
     where: { name: { equals: payload.repoName.trim(), mode: 'insensitive' } },
   });
