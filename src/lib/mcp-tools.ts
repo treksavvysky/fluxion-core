@@ -69,6 +69,29 @@ async function resolveProduct(args: { productId?: string; productSlug?: string }
   return null;
 }
 
+// Resolves a cycle by UUID or slug.
+async function resolveCycle(args: { cycleId?: string; cycleSlug?: string }) {
+  if (args.cycleId) {
+    return prisma.cycle.findUnique({ where: { id: args.cycleId } });
+  }
+  if (args.cycleSlug) {
+    return prisma.cycle.findUnique({ where: { slug: args.cycleSlug.toLowerCase().trim() } });
+  }
+  return null;
+}
+
+// Resolves a project by UUID or slug.
+async function resolveProject(args: { projectId?: string; projectSlug?: string; slug?: string }) {
+  if (args.projectId) {
+    return prisma.project.findUnique({ where: { id: args.projectId } });
+  }
+  const slug = args.projectSlug || args.slug;
+  if (slug) {
+    return prisma.project.findUnique({ where: { slug: slug.trim() } });
+  }
+  return null;
+}
+
 export const mcpTools: ToolDef[] = [
   {
     name: 'read_issues',
@@ -434,6 +457,145 @@ export const mcpTools: ToolDef[] = [
     }
   },
   {
+    name: 'read_cycle',
+    description: 'Read a development cycle in full, including its issues, documents, and derived metrics.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        cycleId: { type: 'string', description: 'The UUID of the cycle' },
+        cycleSlug: { type: 'string', description: 'The slug of the cycle (e.g. sprint-24), as an alternative to cycleId' }
+      }
+    },
+    handler: async (args) => {
+      const cycle = await resolveCycle(args);
+      if (!cycle) throw new Error('Cycle not found: provide a valid cycleId or cycleSlug');
+
+      const fullCycle = await prisma.cycle.findUnique({
+        where: { id: cycle.id },
+        include: {
+          issues: {
+            orderBy: { identifier: 'asc' },
+            select: {
+              id: true,
+              identifier: true,
+              title: true,
+              status: true,
+              priority: true,
+              productId: true,
+              product: { select: { slug: true } },
+              projectId: true,
+              project: { select: { slug: true } },
+              parentId: true,
+              parent: { select: { identifier: true } }
+            }
+          },
+          documents: {
+            orderBy: { updatedAt: 'desc' },
+            select: {
+              id: true,
+              title: true,
+              slug: true,
+              docType: true,
+              updatedAt: true
+            }
+          }
+        }
+      });
+      return json(fullCycle);
+    }
+  },
+  {
+    name: 'create_cycle',
+    description: 'Create a new development cycle/sprint inside the Fluxion Core database.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        name: { type: 'string', description: 'The name of the cycle (e.g. Sprint 24)' },
+        startDate: { type: 'string', description: 'Start date in ISO-8601 format (YYYY-MM-DD)' },
+        endDate: { type: 'string', description: 'End date in ISO-8601 format (YYYY-MM-DD)' },
+        goal: { type: 'string', description: 'The 1-2 sentence operational win goal for this cycle' },
+        capacityPoints: { type: 'number', description: 'Projected point capacity velocity for this cycle' },
+        status: { type: 'string', description: 'Initial status of the cycle (Planned, Active, Completed; default Planned)' }
+      },
+      required: ['name', 'startDate', 'endDate']
+    },
+    handler: async (args) => {
+      if (!args?.name || !args?.startDate || !args?.endDate) {
+        throw new Error('Missing required fields: name, startDate, endDate');
+      }
+      const status = args.status || 'Planned';
+      const { isValidCycleStatus, mintCycleSlug, VALID_CYCLE_STATUSES } = await import('./cycles');
+      if (!isValidCycleStatus(status)) {
+        throw new Error(`Invalid status "${status}". Valid statuses: ${VALID_CYCLE_STATUSES.join(', ')}`);
+      }
+
+      if (status === 'Active') {
+        const conflict = await prisma.cycle.findFirst({ where: { status: 'Active' } });
+        if (conflict) {
+          throw new Error(`Cannot create cycle in Active status: "${conflict.name}" is already Active. Complete it first.`);
+        }
+      }
+
+      let slug = mintCycleSlug(args.name);
+      if (await prisma.cycle.findUnique({ where: { slug } })) {
+        slug = `${slug}-${Date.now().toString(36).slice(-4)}`;
+      }
+
+      const c = await prisma.cycle.create({
+        data: {
+          name: args.name,
+          slug,
+          startDate: new Date(args.startDate),
+          endDate: new Date(args.endDate),
+          goal: args.goal || null,
+          capacityPoints: typeof args.capacityPoints === 'number' ? args.capacityPoints : null,
+          status
+        }
+      });
+      revalidate('/', '/cycles');
+      return text(`Successfully created cycle ${c.name} with slug ${c.slug} (${c.status})`);
+    }
+  },
+  {
+    name: 'update_cycle_status',
+    description: 'Update the lifecycle status of a specific development cycle (Planned, Active, Completed). Enforces that at most one cycle is Active at a time.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        cycleId: { type: 'string', description: 'The UUID of the cycle' },
+        cycleSlug: { type: 'string', description: 'The slug of the cycle (e.g. sprint-24), as an alternative to cycleId' },
+        status: { type: 'string', description: 'The next status (Planned, Active, Completed)' }
+      },
+      required: ['status']
+    },
+    handler: async (args) => {
+      if (!args?.status) throw new Error('Missing status');
+      const cycle = await resolveCycle(args);
+      if (!cycle) throw new Error('Cycle not found: provide a valid cycleId or cycleSlug');
+
+      const { assertValidCycleTransition } = await import('./cycles');
+      assertValidCycleTransition(cycle.status, args.status);
+
+      if (args.status === 'Active') {
+        const conflict = await prisma.cycle.findFirst({
+          where: { status: 'Active', id: { not: cycle.id } }
+        });
+        if (conflict) {
+          throw new Error(`Cannot activate "${cycle.name}": cycle "${conflict.name}" is already Active. Complete it first.`);
+        }
+      }
+
+      const updated = await prisma.cycle.update({
+        where: { id: cycle.id },
+        data: { status: args.status }
+      });
+
+      revalidate('/', '/cycles');
+      if (updated.slug) revalidate(`/cycles/${updated.slug}`);
+      return text(`Successfully updated cycle ${updated.name} status to ${updated.status}`);
+    }
+  },
+  {
     name: 'read_roadmaps',
     description: 'Read the strategic roadmaps and epics.',
     inputSchema: { type: 'object', properties: {} },
@@ -649,6 +811,41 @@ export const mcpTools: ToolDef[] = [
     }
   },
   {
+    name: 'update_project_status',
+    description: 'Update the lifecycle status of a specific project (Planned, Active, On Hold, Completed, Cancelled). Enforces transition validation and required durable documents/completed work rules.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        projectId: { type: 'string', description: 'The UUID of the project' },
+        projectSlug: { type: 'string', description: 'The project slug (e.g. context-grounded-mission-packet-workflow), as an alternative to projectId' },
+        slug: { type: 'string', description: 'The project slug (e.g. context-grounded-mission-packet-workflow), as an alternative to projectId' },
+        status: { type: 'string', description: 'The next status (Planned, Active, On Hold, Completed, Cancelled)' }
+      },
+      required: ['status']
+    },
+    handler: async (args) => {
+      if (!args?.status) throw new Error('Missing status');
+      const project = await resolveProject(args);
+      if (!project) throw new Error('Project not found: provide a valid projectId, projectSlug or slug');
+
+      const { assertValidProjectTransition } = await import('./projects');
+      assertValidProjectTransition(project.status, args.status);
+
+      const { checkProjectClosureAndDurableDocs } = await import('../actions/projects');
+      await checkProjectClosureAndDurableDocs(project.id, args.status);
+
+      const updated = await prisma.project.update({
+        where: { id: project.id },
+        data: { status: args.status }
+      });
+
+      revalidate('/', '/projects');
+      if (updated.slug) revalidate(`/projects/${updated.slug}`);
+
+      return text(`Successfully updated project ${updated.name} status to ${updated.status}`);
+    }
+  },
+  {
     name: 'read_repositories',
     description: 'Read the list of codebase repositories.',
     inputSchema: { type: 'object', properties: {} },
@@ -737,7 +934,7 @@ export const mcpTools: ToolDef[] = [
       if (!args?.slug) throw new Error('Missing slug');
       const doc = await prisma.document.findUnique({
         where: { slug: args.slug },
-        include: { product: true, repo: true, project: true }
+        include: { product: true, repo: true, project: true, cycle: true }
       });
       if (!doc) {
         return { content: [{ type: 'text', text: `Document with slug ${args.slug} not found.` }], isError: true };

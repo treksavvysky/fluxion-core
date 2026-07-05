@@ -70,14 +70,52 @@ export async function submitProject(formData: FormData) {
   redirect(`/projects/${project.slug}`);
 }
 
+export async function checkProjectClosureAndDurableDocs(projectId: string, status: string) {
+  if (status === 'Active') {
+    const docs = await prisma.document.findMany({
+      where: { projectId, docType: { in: ['Charter', 'Design', 'Risk'] } }
+    });
+    const foundTypes = new Set(docs.map(d => d.docType));
+    const missing = ['Charter', 'Design', 'Risk'].filter(t => !foundTypes.has(t));
+    if (missing.length > 0) {
+      throw new Error(`Cannot transition project to Active: missing required documents: ${missing.join(', ')}`);
+    }
+  } else if (status === 'Completed') {
+    const docs = await prisma.document.findMany({
+      where: { projectId, docType: { in: ['Charter', 'Design', 'Risk', 'Retrospective'] } }
+    });
+    const foundTypes = new Set(docs.map(d => d.docType));
+    const missingDocs = ['Charter', 'Design', 'Risk', 'Retrospective'].filter(t => !foundTypes.has(t));
+    if (missingDocs.length > 0) {
+      throw new Error(`Cannot transition project to Completed: missing required documents: ${missingDocs.join(', ')}`);
+    }
+
+    const openIssues = await prisma.issue.findMany({
+      where: {
+        projectId,
+        status: { notIn: ['Done', 'Cancelled'] }
+      }
+    });
+    if (openIssues.length > 0) {
+      const ids = openIssues.map(i => i.identifier).join(', ');
+      throw new Error(`Cannot transition project to Completed: there are open issues: ${ids}`);
+    }
+  }
+}
+
 // Lifecycle transitions (FLX-125), validated against the shared graph.
 export async function updateProjectLifecycle(id: string, status: string) {
   const existing = await prisma.project.findUnique({ where: { id } });
   if (!existing) throw new Error('Project not found');
   assertValidProjectTransition(existing.status, status);
+  await checkProjectClosureAndDurableDocs(id, status);
 
   const project = await prisma.project.update({ where: { id }, data: { status } });
-  revalidatePath('/projects');
-  if (project.slug) revalidatePath(`/projects/${project.slug}`);
+  try {
+    revalidatePath('/projects');
+    if (project.slug) revalidatePath(`/projects/${project.slug}`);
+  } catch {
+    // revalidation is best-effort outside request scope
+  }
   return project;
 }

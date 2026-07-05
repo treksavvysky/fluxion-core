@@ -35,8 +35,8 @@ const textOf = (r) => r?.result?.content?.[0]?.text ?? '';
 console.log('1. tools/list (HTTP surface, previously drifted to 13 tools)');
 const list = await rpc('tools/list');
 const names = (list?.result?.tools ?? []).map((t) => t.name);
-check('27 tools listed', names.length === 27, `got ${names.length}: ${names.join(', ')}`);
-for (const t of ['update_issue', 'search', 'read_product_metrics', 'archive_product', 'read_document', 'write_document', 'create_change_log', 'query_telemetry', 'read_issue', 'read_project', 'read_governing_context', 'hydrate_issue_context', 'decompose_issue', 'check_criterion']) {
+check('31 tools listed', names.length === 31, `got ${names.length}: ${names.join(', ')}`);
+for (const t of ['update_issue', 'search', 'read_product_metrics', 'archive_product', 'read_document', 'write_document', 'create_change_log', 'query_telemetry', 'read_issue', 'read_project', 'read_governing_context', 'hydrate_issue_context', 'decompose_issue', 'check_criterion', 'read_cycle', 'create_cycle', 'update_cycle_status', 'update_project_status']) {
   check(`${t} present`, names.includes(t));
 }
 
@@ -146,6 +146,72 @@ check('read_project returns status report + transitions', rpRes.statusReport?.to
 check('read_project includes project-scoped change logs', rpRes.changeLogs?.some((l) => l.type === 'Decision'));
 const projDoc = await call('write_document', { title: '[SCRATCH] Charter', slug: `scratch-charter-${Date.now()}`, content: 'x', docType: 'Charter' });
 check('Charter docType accepted', textOf(projDoc).includes('published'), JSON.stringify(projDoc));
+
+// --- 8b. update_project_status (FLX-135) ---
+console.log('\n8b. update_project_status');
+const cpPlanned = await call('create_project', { name: '[SCRATCH] Planned Project', status: 'Planned' });
+const plannedSlug = textOf(cpPlanned).match(/slug ([a-z0-9-]+)/)?.[1];
+check('create project as Planned', !!plannedSlug && textOf(cpPlanned).includes('Planned'), textOf(cpPlanned));
+const plannedProj = await prisma.project.findUnique({ where: { slug: plannedSlug } });
+
+// Try to transition to Active -> should fail because Charter, Design, Risk are missing
+const actFail = await call('update_project_status', { projectId: plannedProj.id, status: 'Active' });
+check('transition to Active fails without required docs', !!actFail.error && actFail.error.message.includes('missing required documents'), JSON.stringify(actFail));
+
+// Write Charter, Design, Risk docs
+await call('write_document', { title: '[SCRATCH] Project Charter', content: 'charter content', docType: 'Charter', projectId: plannedProj.id });
+await call('write_document', { title: '[SCRATCH] Project Design Brief', content: 'design content', docType: 'Design', projectId: plannedProj.id });
+await call('write_document', { title: '[SCRATCH] Project Risk Register', content: 'risk content', docType: 'Risk', projectId: plannedProj.id });
+
+// Try to transition to Active -> should succeed now
+const actOk = await call('update_project_status', { projectId: plannedProj.id, status: 'Active' });
+check('transition to Active succeeds with required docs', textOf(actOk).includes('Active'), JSON.stringify(actOk));
+
+// Try to transition to Completed -> should fail because Retrospective is missing
+const compFail = await call('update_project_status', { projectId: plannedProj.id, status: 'Completed' });
+check('transition to Completed fails without Retrospective', !!compFail.error && compFail.error.message.includes('missing required documents'), JSON.stringify(compFail));
+
+// Write Retrospective doc
+await call('write_document', { title: '[SCRATCH] Project Retrospective', content: 'retro content', docType: 'Retrospective', projectId: plannedProj.id });
+
+// Try to transition to Completed -> should succeed now (0 issues is 0 open issues)
+const compOk = await call('update_project_status', { projectId: plannedProj.id, status: 'Completed' });
+check('transition to Completed succeeds with Retrospective', textOf(compOk).includes('Completed'), JSON.stringify(compOk));
+
+// Reopen to Active (legal transition Completed -> Active)
+const reopenOk = await call('update_project_status', { projectId: plannedProj.id, status: 'Active' });
+check('reopen to Active succeeds', textOf(reopenOk).includes('Active'), JSON.stringify(reopenOk));
+
+// Create an open issue for the project to test completed work gate
+const testIssue = await prisma.issue.create({
+  data: {
+    identifier: 'FLX-SCR-999',
+    title: '[SCRATCH] Project open issue test',
+    status: 'Todo',
+    priority: 'Low',
+    projectId: plannedProj.id,
+    productId: plannedProj.productId
+  }
+});
+
+// Try to transition to Completed -> should fail due to open issue
+const compFailIssue = await call('update_project_status', { projectId: plannedProj.id, status: 'Completed' });
+check('transition to Completed fails with open issues', !!compFailIssue.error && compFailIssue.error.message.includes('open issues'), JSON.stringify(compFailIssue));
+
+// Resolve the issue (mark as Done)
+await prisma.issue.update({
+  where: { id: testIssue.id },
+  data: { status: 'Done' }
+});
+
+// Try to transition to Completed -> should succeed now
+const compOk2 = await call('update_project_status', { projectId: plannedProj.id, status: 'Completed' });
+check('transition to Completed succeeds after resolving issues', textOf(compOk2).includes('Completed'), JSON.stringify(compOk2));
+
+// Cleanup test project and issue
+await prisma.issue.deleteMany({ where: { identifier: 'FLX-SCR-999' } });
+await prisma.document.deleteMany({ where: { projectId: plannedProj.id } });
+await prisma.project.delete({ where: { id: plannedProj.id } });
 
 // --- 9. Fionn M1: Context Hydrator (FLX-121) ---
 console.log('\n9. hydrate_issue_context');
@@ -257,6 +323,32 @@ await call('update_issue', { identifier: dedupIssueId, status: 'Cancelled' });
 const sig4 = await cicd({ service: 'scratch-dedup-svc', description: 'Error 137: OOM during build at 2026-06-13T12:00:00Z run 777' });
 check('closed issue not silently absorbed; new issue references prior', !!sig4.ingestedIssue?.identifier && sig4.ingestedIssue.identifier !== dedupIssueId && sig4.ingestedIssue.context?.includes(dedupIssueId), JSON.stringify(sig4).slice(0, 200));
 await prisma.issue.deleteMany({ where: { title: { contains: 'scratch-dedup-svc' } } });
+
+// --- 13. Cycle Management Tools ---
+console.log('\n13. Cycle tools: read_cycles, create_cycle, read_cycle, update_cycle_status');
+const c1 = await call('create_cycle', {
+  name: '[SCRATCH] Cycle Alpha',
+  startDate: '2026-07-01',
+  endDate: '2026-07-14',
+  goal: 'Deploy initial sprint objectives',
+  capacityPoints: 15,
+  status: 'Planned'
+});
+const c1res = textOf(c1).match(/with slug ([a-z0-9-]+)/)?.[1];
+check('create_cycle works', !!c1res, textOf(c1));
+
+if (c1res) {
+  const c2 = await call('read_cycle', { cycleSlug: c1res });
+  const c2res = JSON.parse(textOf(c2));
+  check('read_cycle works and returns goal', c2res?.goal === 'Deploy initial sprint objectives', textOf(c2));
+
+  const c3 = await call('update_cycle_status', { cycleSlug: c1res, status: 'Active' });
+  const success = textOf(c3).includes('Active') || (c3.error && c3.error.message.includes('already Active'));
+  check('update_cycle_status to Active checks status or conflict correctly', !!success, JSON.stringify(c3.error ?? c3));
+
+  // cleanup cycle
+  await prisma.cycle.delete({ where: { slug: c1res } });
+}
 
 // --- Cleanup ---
 await prisma.issue.deleteMany({ where: { identifier: { in: [scratchId, childId, parentId2].filter(Boolean) } } });
