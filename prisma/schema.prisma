@@ -113,6 +113,7 @@ model Product {
   documents    Document[]
   repositories ProductRepository[]
   syncBatches  SyncBatch[]
+  commitRoutes CommitRoute[]
 }
 
 model Repository {
@@ -129,6 +130,7 @@ model Repository {
   changeLogs  ChangeLog[]
   documents   Document[]
   products    ProductRepository[]
+  commits     Commit[]
 }
 
 model ProductRepository {
@@ -142,6 +144,40 @@ model ProductRepository {
   updatedAt    DateTime   @updatedAt
 
   @@unique([productId, repositoryId])
+}
+
+// Push-event ingest (FLX-119): commits recorded with their changed paths,
+// routed to products by matching ProductRepository.pathFilter globs, with
+// the repository's directly-linked product as the fallback for unmatched
+// paths. Routing rows are derived data — recomputable from paths + filters.
+model Commit {
+  id          String    @id @default(cuid())
+  sha         String
+  message     String
+  author      String?
+  branch      String?
+  committedAt DateTime?
+  paths       String[]  // changed file paths (added + modified + removed)
+  createdAt   DateTime  @default(now())
+
+  repoId      String
+  repo        Repository @relation(fields: [repoId], references: [id], onDelete: Cascade)
+  routes      CommitRoute[]
+
+  @@unique([repoId, sha]) // webhook re-deliveries are idempotent
+}
+
+model CommitRoute {
+  id           String   @id @default(cuid())
+  commitId     String
+  commit       Commit   @relation(fields: [commitId], references: [id], onDelete: Cascade)
+  productId    String
+  product      Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
+  matchedPaths String[] // the commit paths that routed to this product
+  via          String   // "pathFilter" | "repoDefault"
+  createdAt    DateTime @default(now())
+
+  @@unique([commitId, productId])
 }
 
 model Project {

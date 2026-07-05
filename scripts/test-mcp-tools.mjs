@@ -35,8 +35,8 @@ const textOf = (r) => r?.result?.content?.[0]?.text ?? '';
 console.log('1. tools/list (HTTP surface, previously drifted to 13 tools)');
 const list = await rpc('tools/list');
 const names = (list?.result?.tools ?? []).map((t) => t.name);
-check('33 tools listed', names.length === 33, `got ${names.length}: ${names.join(', ')}`);
-for (const t of ['update_issue', 'search', 'read_product_metrics', 'archive_product', 'read_document', 'write_document', 'create_change_log', 'query_telemetry', 'read_issue', 'read_project', 'read_governing_context', 'hydrate_issue_context', 'decompose_issue', 'check_criterion', 'read_cycle', 'create_cycle', 'update_cycle_status', 'update_project_status', 'brief_pcp_packet', 'refingerprint_pcp_packet']) {
+check('34 tools listed', names.length === 34, `got ${names.length}: ${names.join(', ')}`);
+for (const t of ['update_issue', 'search', 'read_product_metrics', 'archive_product', 'read_document', 'write_document', 'create_change_log', 'query_telemetry', 'read_issue', 'read_project', 'read_governing_context', 'hydrate_issue_context', 'decompose_issue', 'check_criterion', 'read_cycle', 'create_cycle', 'update_cycle_status', 'update_project_status', 'brief_pcp_packet', 'refingerprint_pcp_packet', 'read_product_commits']) {
   check(`${t} present`, names.includes(t));
 }
 
@@ -445,6 +445,60 @@ if (!agentRegistry || Object.keys(agentRegistry).length === 0) {
 
   await prisma.issue.deleteMany({ where: { identifier: { in: [attId, legacyId].filter(Boolean) } } });
   await prisma.activityLog.deleteMany({ where: { target: { in: [attId, legacyId].filter(Boolean) } } });
+}
+
+// --- 16. Commit-diff -> product routing (FLX-119) ---
+console.log('\n16. push ingest + pathFilter routing');
+{
+  const prodA = await prisma.product.create({ data: { slug: `SCR-RT-A-${Date.now()}`, name: '[SCRATCH] Route Target A' } });
+  const prodB = await prisma.product.create({ data: { slug: `SCR-RT-B-${Date.now()}`, name: '[SCRATCH] Route Target B' } });
+  const monoRepo = await prisma.repository.create({ data: { name: `scratch-mono-${Date.now()}`, productId: prodB.id } });
+  await prisma.productRepository.create({ data: { productId: prodA.id, repositoryId: monoRepo.id, pathFilter: 'services/auth/*' } });
+
+  const pushUrl = (token) => `${BASE_URL}/api/webhooks/push${token ? `?token=${token}` : ''}`;
+  const ghPayload = {
+    ref: 'refs/heads/master',
+    repository: { name: monoRepo.name, html_url: 'https://example.test/mono' },
+    commits: [
+      { id: 'aaa111', message: 'auth: nested + direct paths', author: { name: 'suite' }, timestamp: '2026-07-05T10:00:00Z', added: ['services/auth/login.ts'], modified: ['services/auth/deep/nested.ts'], removed: [] },
+      { id: 'bbb222', message: 'docs only', author: { name: 'suite' }, added: [], modified: ['README.md'], removed: [] },
+      { id: 'ccc333', message: 'spans two products', author: { name: 'suite' }, added: ['services/auth/mfa.ts'], modified: ['docs/guide.md'], removed: [] },
+    ],
+  };
+
+  const noAuth = await fetch(pushUrl(), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(ghPayload) });
+  check('push without key rejected 401', noAuth.status === 401);
+  const ingest = await fetch(pushUrl(API_KEY), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(ghPayload) }).then((r) => r.json());
+  check('GitHub payload ingested (3 commits)', ingest.success === true && ingest.recorded?.length === 3, JSON.stringify(ingest).slice(0, 200));
+
+  const rcA = JSON.parse(textOf(await call('read_product_commits', { productSlug: prodA.slug })));
+  const rcB = JSON.parse(textOf(await call('read_product_commits', { productSlug: prodB.slug })));
+  const shasA = rcA.commits.map((c) => c.sha).sort();
+  const shasB = rcB.commits.map((c) => c.sha).sort();
+  check('pathFilter routes auth commits to product A (trailing /* recursive)', shasA.join(',') === 'aaa111,ccc333', JSON.stringify(rcA.commits));
+  check('nested path matched by trailing /*', rcA.commits.find((c) => c.sha === 'aaa111')?.matchedPaths.includes('services/auth/deep/nested.ts'));
+  check('unmatched paths fall back to repo default product B', shasB.join(',') === 'bbb222,ccc333', JSON.stringify(rcB.commits));
+  const span = rcB.commits.find((c) => c.sha === 'ccc333');
+  check('spanning commit routes to B only with leftover paths', span?.via === 'repoDefault' && span?.matchedPaths.join(',') === 'docs/guide.md', JSON.stringify(span));
+
+  const redeliver = await fetch(pushUrl(API_KEY), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(ghPayload) }).then((r) => r.json());
+  check('re-delivery is idempotent (3 duplicates, 0 recorded)', redeliver.duplicates?.length === 3 && redeliver.recorded?.length === 0, JSON.stringify(redeliver).slice(0, 150));
+
+  // single-repo (no pathFilter links): everything routes to the direct product
+  const soloRepo = await prisma.repository.create({ data: { name: `scratch-solo-${Date.now()}`, productId: prodA.id } });
+  const soloIngest = await fetch(pushUrl(API_KEY), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ repoName: soloRepo.name, branch: 'master', commits: [{ sha: 'ddd444', message: 'local fallback shape', paths: ['src/index.ts', 'package.json'] }] }),
+  }).then((r) => r.json());
+  check('local fallback payload shape accepted', soloIngest.success === true && soloIngest.recorded?.length === 1, JSON.stringify(soloIngest).slice(0, 150));
+  const rcA2 = JSON.parse(textOf(await call('read_product_commits', { productSlug: prodA.slug })));
+  const solo = rcA2.commits.find((c) => c.sha === 'ddd444');
+  check('single-repo commit routes whole diff to direct product', solo?.via === 'repoDefault' && solo?.matchedPaths.length === 2, JSON.stringify(solo));
+
+  await prisma.commit.deleteMany({ where: { repoId: { in: [monoRepo.id, soloRepo.id] } } });
+  await prisma.repository.deleteMany({ where: { id: { in: [monoRepo.id, soloRepo.id] } } });
+  await prisma.product.deleteMany({ where: { id: { in: [prodA.id, prodB.id] } } });
 }
 
 // --- Cleanup ---

@@ -1079,6 +1079,43 @@ export const mcpTools: ToolDef[] = [
     }
   },
   {
+    name: 'read_product_commits',
+    description: 'Execution bridge (FLX-119): recent commits routed to a product via ProductRepository pathFilter matching (with repository-default fallback). Use this to scope a code search to the paths a product actually owns before grepping an entire repository.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        productId: { type: 'string', description: 'The UUID of the product' },
+        productSlug: { type: 'string', description: 'Product slug (e.g. FLX) as an alternative to productId' },
+        limit: { type: 'number', description: 'Max commits to return (default 20, max 100)' }
+      }
+    },
+    handler: async (args) => {
+      const product = await resolveProduct(args ?? {});
+      if (!product) throw new Error('Product not found: provide a valid productId or productSlug');
+      const limit = Math.min(Math.max(Number(args?.limit) || 20, 1), 100);
+      const routes = await prisma.commitRoute.findMany({
+        where: { productId: product.id },
+        orderBy: { commit: { createdAt: 'desc' } },
+        take: limit,
+        include: { commit: { include: { repo: { select: { name: true, url: true } } } } },
+      });
+      return json({
+        product: { slug: product.slug, name: product.name },
+        commits: routes.map((r) => ({
+          sha: r.commit.sha,
+          message: r.commit.message,
+          author: r.commit.author,
+          branch: r.commit.branch,
+          committedAt: r.commit.committedAt,
+          repo: r.commit.repo.name,
+          repoUrl: r.commit.repo.url,
+          via: r.via,
+          matchedPaths: r.matchedPaths,
+        })),
+      });
+    }
+  },
+  {
     name: 'brief_pcp_packet',
     description: 'PCP Git Branch Handoff (launch stage): validate the raw content of a repository\'s pcp/context.json against the PCP v0.2 packet schema, verify its SHA-256 fingerprint, and return a read-only briefing markdown block to inject into the executing agent\'s prompt. Fluxion never reads repositories itself — the caller reads the file from its own clone and passes the content here.',
     inputSchema: {
