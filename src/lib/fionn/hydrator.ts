@@ -44,6 +44,14 @@ export async function hydrateIssueContext(ref: { issueId?: string; identifier?: 
       : null,
   ]);
 
+  // Hard fence (FLX-144, data-isolation doctrine): LIFE-namespace issues are
+  // personal-domain records admitted for the operator's own triage. They are
+  // never handed to execution agents, and this hydrator is the execution
+  // handoff surface — so it refuses rather than assemble a package.
+  if (product?.slug === 'LIFE') {
+    throw new Error(`${issue.identifier} is a LIFE-namespace issue: personal-domain work is operator-only and is never assigned to execution agents (FLX-144 hard fence). No context package will be assembled.`);
+  }
+
   const vision = product?.documents.find(d => d.docType === 'Vision')?.content;
   const boundaries = product?.documents.find(d => d.docType === 'Boundaries')?.content;
 

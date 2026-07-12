@@ -707,6 +707,36 @@ export const mcpTools: ToolDef[] = [
     }
   },
   {
+    name: 'read_product_briefs',
+    description: 'Read the durable scope-guard briefs (Vision and Boundaries documents) for every product, or one product by slug. Deterministic read-side assembly for governance hydration (Fionn conversion, FLX-144): each entry carries slug, name, status, description, and the brief contents (null when not documented).',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        productSlug: { type: 'string', description: 'Optional product slug to fetch a single product\'s briefs' }
+      }
+    },
+    handler: async (args) => {
+      const products = await prisma.product.findMany({
+        where: args?.productSlug ? { slug: String(args.productSlug).toUpperCase() } : undefined,
+        orderBy: { createdAt: 'asc' },
+        include: {
+          documents: { where: { docType: { in: ['Vision', 'Boundaries'] } }, select: { docType: true, content: true } }
+        }
+      });
+      if (args?.productSlug && products.length === 0) {
+        throw new Error(`Product not found: ${args.productSlug}`);
+      }
+      return json(products.map(p => ({
+        slug: p.slug,
+        name: p.name,
+        status: p.status,
+        description: p.description,
+        vision: p.documents.find(d => d.docType === 'Vision')?.content ?? null,
+        boundaries: p.documents.find(d => d.docType === 'Boundaries')?.content ?? null
+      })));
+    }
+  },
+  {
     name: 'read_product_metrics',
     description: 'Read operational rollup metrics for a product: open/closed issues, defect counts, priority-weighted technical-debt score, and roadmap completion percentage. Identify the product by UUID or slug.',
     inputSchema: {
@@ -1280,4 +1310,47 @@ export async function callTool(name: string, args: unknown, ctx: ToolContext = {
   const tool = mcpTools.find(t => t.name === name);
   if (!tool) throw new Error(`Tool not found: ${name}`);
   return tool.handler(args ?? {}, ctx);
+}
+
+// --- MCP prompts: operator rituals (the scriptoria curation_triage
+// precedent). A prompt is a canned instruction package the operator invokes
+// in their own agent session; the session carries it out with the tools it
+// has. Both transports serve this registry, like the tool registry above.
+interface PromptDef {
+  name: string;
+  description: string;
+  text: string;
+}
+
+const mcpPrompts: PromptDef[] = [
+  {
+    name: 'fionn_conversion_run',
+    description: 'Operator ritual (FLX-144): run Fionn\'s conversion governor over the Cortex OS conversion queue — at most 5 entries per run — and review the verdicts conversationally.',
+    text: [
+      'Run Fionn\'s conversion governor over the Cortex OS library\'s conversion queue (the idea→action seam, doc fionn-seam-idea-to-action).',
+      '',
+      'From the Fluxion repo root (~/fluxion), run:',
+      '',
+      '    node --env-file=.env agents/fionn.mjs convert',
+      '',
+      'The harness runs the full three-phase pipeline per queue entry (batch cap 5): hydrate (queue entry + link neighborhood + prior [conversion] observations + product briefs), judge (one schema-bounded call: convert | decline | defer), enforce & audit (converted issues land in Triage with Change Control attribution; the library record is curated back over POST /curate).',
+      '',
+      'Then review the verdicts with the operator, one per record: the verdict, its rationale, and — for conversions — the created issue identifier. Everything is reversible: a converted issue can be Cancelled, and the record\'s curation can be re-curated. If the operator wants a preview without any writes first, use `convert --dry-run`.',
+      '',
+      'Do not judge the queue entries yourself and do not create issues from them directly — conversion judgment belongs exclusively to the harness\'s single bounded model call (Fionn charter).',
+    ].join('\n'),
+  },
+];
+
+export function listPromptSchemas() {
+  return mcpPrompts.map(({ name, description }) => ({ name, description }));
+}
+
+export function getPrompt(name: string): { description: string; messages: { role: 'user'; content: { type: 'text'; text: string } }[] } {
+  const prompt = mcpPrompts.find(p => p.name === name);
+  if (!prompt) throw new Error(`Prompt not found: ${name}`);
+  return {
+    description: prompt.description,
+    messages: [{ role: 'user', content: { type: 'text', text: prompt.text } }],
+  };
 }

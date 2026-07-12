@@ -1,6 +1,6 @@
 import { createMcpServer } from '@/lib/mcp';
 import { addTransport, removeTransport } from '@/lib/mcp-state';
-import { listToolSchemas, callTool } from '@/lib/mcp-tools';
+import { listToolSchemas, callTool, listPromptSchemas, getPrompt } from '@/lib/mcp-tools';
 import { resolveIdentity } from '@/lib/api-auth';
 import { SSEServerTransport } from '@modelcontextprotocol/sdk/server/sse.js';
 import type { NextApiRequest, NextApiResponse } from 'next';
@@ -56,7 +56,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           result: {
             protocolVersion: '2024-11-05',
             capabilities: {
-              tools: {}
+              tools: {},
+              prompts: {}
             },
             serverInfo: {
               name: 'fluxion-core-mcp',
@@ -76,6 +77,19 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
       if (method === 'tools/call') {
         const result = await callTool(request.params?.name, request.params?.arguments, { identity: auth.identity });
+        return res.status(200).json({ jsonrpc: '2.0', id, result });
+      }
+
+      if (method === 'prompts/list') {
+        return res.status(200).json({
+          jsonrpc: '2.0',
+          id,
+          result: { prompts: listPromptSchemas() }
+        });
+      }
+
+      if (method === 'prompts/get') {
+        const result = getPrompt(request.params?.name);
         return res.status(200).json({ jsonrpc: '2.0', id, result });
       }
 

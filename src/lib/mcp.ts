@@ -1,6 +1,6 @@
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
-import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js';
-import { listToolSchemas, callTool } from './mcp-tools';
+import { CallToolRequestSchema, ListToolsRequestSchema, ListPromptsRequestSchema, GetPromptRequestSchema } from '@modelcontextprotocol/sdk/types.js';
+import { listToolSchemas, callTool, listPromptSchemas, getPrompt } from './mcp-tools';
 
 // The SDK binds one Server instance to one transport, so each SSE session
 // gets its own Server. All instances serve the shared registry in
@@ -13,7 +13,8 @@ export function createMcpServer(identity?: string): Server {
     version: '1.0.0'
   }, {
     capabilities: {
-      tools: {}
+      tools: {},
+      prompts: {}
     }
   });
 
@@ -23,6 +24,14 @@ export function createMcpServer(identity?: string): Server {
 
   server.setRequestHandler(CallToolRequestSchema, async (request) => {
     return callTool(request.params.name, request.params.arguments, { identity });
+  });
+
+  server.setRequestHandler(ListPromptsRequestSchema, async () => {
+    return { prompts: listPromptSchemas() };
+  });
+
+  server.setRequestHandler(GetPromptRequestSchema, async (request) => {
+    return getPrompt(request.params.name);
   });
 
   return server;

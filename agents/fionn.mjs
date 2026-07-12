@@ -20,6 +20,8 @@
 //   node --env-file=.env agents/fionn.mjs decompose FLX-102           # PROPOSE a breakdown (no mutation)
 //   node --env-file=.env agents/fionn.mjs decompose FLX-102 --apply   # apply via the layer (human gate)
 //   node --env-file=.env agents/fionn.mjs verify AETHERMUX-3          # judge attestation evidence (advisory, no mutation)
+//   node --env-file=.env agents/fionn.mjs convert                     # govern the cortex-os conversion queue (FLX-144, cap 5)
+//   node --env-file=.env agents/fionn.mjs convert --dry-run           # judge only: print verdicts, write nothing
 //
 // Config (env):
 //   ANTHROPIC_API_KEY  required
@@ -28,6 +30,8 @@
 //                      claude-haiku-4-5-20251001 for cheap testing, claude-opus-4-8 for hardest judgments
 //   FLUXION_URL        default http://localhost:3002
 //   FLUXION_API_KEY    required (Fluxion MCP auth)
+//   CORTEX_URL         default http://127.0.0.1:8021 (the library's read surface, convert mode)
+//   CORTEX_API_TOKEN   required by convert mode for the /curate write-back (not for --dry-run)
 
 import Anthropic from '@anthropic-ai/sdk';
 import { createHash } from 'node:crypto';
@@ -431,10 +435,264 @@ async function verifyIssue(identifier) {
   return verdict;
 }
 
+// --- Conversion governance (FLX-144): the idea→action seam ---
+// The cortex-os library (The Library) classifies shelved records with
+// conversion_pressure / action_candidate axes and serves them on GET /queue.
+// This mode governs whether a queue entry becomes a Fluxion issue, through
+// the standard three-phase pipeline. One-way knowledge: this harness knows
+// the library's read surface; the library knows nothing of Fluxion's schema.
+// Write-back is ordinary curation (bearer POST /curate). Seam contract:
+// Fluxion doc fionn-seam-idea-to-action; cortex-os docs/FIONN-SEAM.md.
+
+const CORTEX_URL = process.env.CORTEX_URL || 'http://127.0.0.1:8021';
+const CONVERT_BATCH_CAP = 5; // operator decision 2026-07-12: at most 5 queue entries per run
+
+async function cortexGet(path) {
+  const res = await fetch(`${CORTEX_URL}${path}`);
+  if (!res.ok) throw new Error(`library GET ${path}: HTTP ${res.status}`);
+  return res.json();
+}
+
+async function cortexCurate(payload) {
+  const res = await fetch(`${CORTEX_URL}/curate`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${process.env.CORTEX_API_TOKEN}` },
+    body: JSON.stringify(payload),
+  });
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok || body.status === 'error') {
+    throw new Error(`library /curate ${payload.record_id}: HTTP ${res.status}${body.error ? ` — ${body.error}` : ''}`);
+  }
+  return body.record;
+}
+
+const CONVERT_SCHEMA = {
+  type: 'object',
+  properties: {
+    verdict: {
+      type: 'string',
+      enum: ['convert', 'decline', 'defer'],
+      description: 'convert: admit this idea for triage as a Fluxion issue; decline: not workable as an issue; defer: real but premature — leave it incubating on the shelf',
+    },
+    rationale: {
+      type: 'string',
+      description: 'One to three sentences, mandatory for every verdict — this lands verbatim in the audit trail and on the library record',
+    },
+    issue: {
+      type: ['object', 'null'],
+      description: 'Required when verdict is convert, null otherwise',
+      properties: {
+        productSlug: { type: 'string', description: 'Target product slug, chosen from the product briefs in the package (life-domain records always target LIFE)' },
+        title: { type: 'string', description: 'Concise, action-oriented issue title' },
+        description: { type: 'string', description: 'What the issue delivers, derived from the record\'s clarification — not the raw fossil verbatim' },
+        priority: { type: 'string', enum: ['Low', 'Medium', 'High', 'Critical'] },
+      },
+      required: ['productSlug', 'title', 'description', 'priority'],
+      additionalProperties: false,
+    },
+    removeCandidacy: {
+      type: 'boolean',
+      description: 'decline only: true removes the record from the conversion queue permanently (curates action_candidate off). Use only when the idea should stop being offered for conversion, not merely when it needs rework.',
+    },
+  },
+  required: ['verdict', 'rationale'],
+  additionalProperties: false,
+};
+
+const CONVERT_SYSTEM = `You are Fionn, the conversion governor of an AI-native project tracker. You receive one shelved record from the Cortex OS library's conversion queue — an idea whose classification (conversion pressure, action candidacy) says it wants to become work — together with its link neighborhood, any prior conversion verdicts, and the candidate product briefs. Decide whether it becomes a Fluxion issue.
+
+Rules:
+- "convert" admits the idea for TRIAGE — it is admission, not a priority claim. The idea must be concrete enough that a triage pass can judge it: a deliverable can be named, a product fits it. Derive the issue title/description from the record's clarification, not the raw capture verbatim.
+- Choose the target product from the briefs and stay inside its Boundaries; a record whose domain is "life" always targets LIFE, and a record whose domain is "development" (or unclassified) never targets LIFE.
+- "defer" means real but premature. Prior [conversion] observations show earlier verdicts: repeated deferral of the same record should raise your bar — either it has matured (convert) or it never will (decline).
+- "decline" means not workable as an issue: too vague even after clarification, duplicate of existing tracked work, or crossing every candidate product's boundaries. Set removeCandidacy true only when the record should stop appearing in the queue entirely.
+- The rationale is mandatory and becomes the permanent audit record of this judgment.`;
+
+// Deterministic hydration: queue entry + link neighborhood + prior
+// [conversion] observations + product briefs. No model call.
+function conversionPackage(record, neighborhood, briefs) {
+  const parts = [];
+  parts.push(`# Conversion Package: library record ${record.record_id}\n`);
+  parts.push(`Assembled deterministically by Fionn (Cognitive Command Layer) from the Cortex OS library's conversion queue.\n`);
+
+  parts.push(`## The record\n`);
+  parts.push([
+    `- record_id: ${record.record_id}`,
+    `- captured: ${record.timestamp} in ${record.origin_context}`,
+    `- type: ${record.type ?? 'IDEA'} · status: ${record.status ?? 'captured'}`,
+    `- domain: ${record.domain ?? '(unclassified — treated as development for targeting)'}`,
+    `- packet: ${record.packet ?? '(unclassified)'} · conversion_pressure: ${record.conversion_pressure ?? '(unbanded)'} · action_candidate: ${record.action_candidate}`,
+  ].join('\n') + '\n');
+  parts.push(`### Raw capture (the immutable fossil)\n\n${record.raw_capture}\n`);
+  parts.push(`### Clarification\n\n${record.clarification?.trim() || '*(not yet clarified)*'}\n`);
+
+  const conversionObs = (record.observations || []).filter(o => String(o).startsWith('[conversion]'));
+  parts.push(`### Prior conversion verdicts\n\n${conversionObs.length ? conversionObs.map(o => `- ${o}`).join('\n') : '*(none — first judgment of this record)*'}\n`);
+
+  const otherObs = (record.observations || []).filter(o => !String(o).startsWith('[conversion]'));
+  if (otherObs.length) parts.push(`### Other observations\n\n${otherObs.map(o => `- ${o}`).join('\n')}\n`);
+
+  const fmtNeighbor = n => `- (${Array.isArray(n.relations) ? n.relations.join(', ') : n.relation}) ${n.record.record_id}: ${n.record.raw_capture ?? ''}`.trim();
+  const outgoing = neighborhood?.outgoing ?? [];
+  const incoming = neighborhood?.incoming ?? [];
+  parts.push(`## Link neighborhood\n\n${outgoing.length || incoming.length
+    ? [...outgoing.map(fmtNeighbor), ...incoming.map(fmtNeighbor)].join('\n')
+    : '*(no links)*'}\n`);
+
+  parts.push(`## Candidate product briefs\n`);
+  for (const b of briefs) {
+    parts.push(`### ${b.slug} — ${b.name} (${b.status})\n`);
+    parts.push(`${b.description?.trim() || '*(no description)*'}\n`);
+    parts.push(`**Vision:** ${b.vision?.trim() || '*(not documented)*'}\n`);
+    parts.push(`**Boundaries (scope guard):** ${b.boundaries?.trim() || '*(not documented)*'}\n`);
+  }
+
+  return parts.join('\n');
+}
+
+async function convertQueue(dryRun) {
+  if (!dryRun && !process.env.CORTEX_API_TOKEN) {
+    throw new Error('CORTEX_API_TOKEN must be set for convert (the /curate write-back is bearer-gated). Use --dry-run to judge without writing.');
+  }
+
+  const { queue } = await cortexGet(`/queue?limit=${CONVERT_BATCH_CAP}`);
+  if (!queue?.length) {
+    console.log('Conversion queue is empty — nothing under pressure on the shelves.');
+    return [];
+  }
+
+  const briefs = JSON.parse(await layer('read_product_briefs', {}));
+  const lifeProduct = briefs.find(b => b.slug === 'LIFE');
+  const devBriefs = briefs.filter(b => b.slug !== 'LIFE' && b.status !== 'Archived' && b.status !== 'Sunset');
+  const date = new Date().toISOString().slice(0, 10);
+
+  console.log(`Fionn conversion governor (${MODEL}) — ${queue.length} queue entr${queue.length === 1 ? 'y' : 'ies'} (cap ${CONVERT_BATCH_CAP})${dryRun ? ' [DRY RUN — judging only, no writes]' : ''}:`);
+  const results = [];
+
+  for (const record of queue) {
+    const isLife = record.domain === 'life';
+
+    // LIFE fence precondition: the product must exist before the first life
+    // conversion. Skip (don't decline) — this is an operator setup gap, not
+    // a judgment on the record.
+    if (isLife && !lifeProduct) {
+      console.log(`  ${record.record_id}: SKIPPED — life-domain record, but no LIFE product exists in Fluxion yet. Create it before the first life conversion (FLX-144).`);
+      results.push({ record_id: record.record_id, verdict: 'skipped', reason: 'LIFE product missing' });
+      continue;
+    }
+
+    // Hydrate (deterministic): life records see only the LIFE brief;
+    // development/unclassified records see every open dev product brief.
+    const neighborhood = await cortexGet(`/related?record_id=${encodeURIComponent(record.record_id)}`);
+    const pkg = conversionPackage(record, neighborhood, isLife ? [lifeProduct] : devBriefs);
+
+    // Judge (one bounded call)
+    const response = await anthropic.messages.create({
+      model: MODEL,
+      max_tokens: 4096,
+      system: CONVERT_SYSTEM,
+      output_config: { format: { type: 'json_schema', schema: CONVERT_SCHEMA } },
+      messages: [{ role: 'user', content: pkg }],
+    });
+    if (response.stop_reason === 'refusal') {
+      console.log(`  ${record.record_id}: model refused — record left untouched`);
+      continue;
+    }
+    if (response.stop_reason === 'max_tokens') {
+      console.log(`  ${record.record_id}: output truncated — record left untouched`);
+      continue;
+    }
+    const decision = JSON.parse(response.content.find(b => b.type === 'text').text);
+
+    // Domain-branch fence, belt and braces over the prompt rule
+    if (decision.verdict === 'convert') {
+      if (!decision.issue) {
+        console.log(`  ${record.record_id}: convert verdict without an issue payload — record left untouched`);
+        continue;
+      }
+      if (isLife) decision.issue.productSlug = 'LIFE';
+      else if (decision.issue.productSlug === 'LIFE') {
+        console.log(`  ${record.record_id}: judge targeted LIFE for a non-life record — fence refused, record left untouched`);
+        continue;
+      }
+    }
+
+    console.log(`  ${record.record_id}: ${decision.verdict.toUpperCase()}${decision.verdict === 'convert' ? ` -> ${decision.issue.productSlug} [${decision.issue.priority}] "${decision.issue.title}"` : ''} — ${decision.rationale}`);
+    results.push({ record_id: record.record_id, ...decision });
+    if (dryRun) continue;
+
+    // Enforce & audit (deterministic)
+    if (decision.verdict === 'convert') {
+      const created = await layer('create_issue', {
+        title: decision.issue.title,
+        description: decision.issue.description,
+        context: `Converted from Cortex OS library record '${record.record_id}' (captured ${record.timestamp} in ${record.origin_context}; conversion_pressure ${record.conversion_pressure ?? 'unbanded'}) by Fionn's conversion governor. Raw capture: ${record.raw_capture}`,
+        priority: decision.issue.priority,
+        status: 'Triage',
+        productSlug: decision.issue.productSlug,
+      });
+      const identifier = created.match(/created issue (\S+):/)?.[1];
+      if (!identifier) throw new Error(`could not parse created issue identifier from: ${created}`);
+      const issue = JSON.parse(await layer('read_issue', { identifier }));
+      await layer('create_change_log', {
+        type: 'Decision',
+        description: `Fionn conversion: library record '${record.record_id}' -> ${identifier} (${decision.issue.productSlug}, Triage). ${decision.rationale}`,
+        reason: `Idea->action conversion governance (FLX-144, doc fionn-seam-idea-to-action); operator-triggered run, model ${MODEL}`,
+        approvedBy: 'Fionn (conversion governor)',
+        implementedBy: `Fionn/${MODEL}`,
+        issueId: issue.id,
+        productId: issue.productId ?? undefined,
+      });
+      await cortexCurate({
+        record_id: record.record_id,
+        status: 'pre-planning',
+        observation: `[conversion] ${identifier}, ${date}`,
+      });
+      console.log(`    -> ${identifier} created in Triage; record curated to pre-planning`);
+      results[results.length - 1].identifier = identifier;
+    } else {
+      // decline/defer: no Fluxion issue state, but the judgment is audited
+      await layer('create_change_log', {
+        type: 'Decision',
+        description: `Fionn conversion ${decision.verdict}: library record '${record.record_id}'. ${decision.rationale}`,
+        reason: `Idea->action conversion governance (FLX-144); operator-triggered run, model ${MODEL}`,
+        approvedBy: 'Fionn (conversion governor)',
+        implementedBy: `Fionn/${MODEL}`,
+      });
+      if (decision.verdict === 'defer') {
+        // Operator decision 2026-07-12: defer stamps an observation, axes
+        // untouched — pressure remains the librarian's signal, never the
+        // governor's to mutate.
+        await cortexCurate({
+          record_id: record.record_id,
+          observation: `[conversion] deferred ${date} — ${decision.rationale}`,
+        });
+        console.log(`    -> defer stamped on the record; axes untouched`);
+      } else {
+        await cortexCurate({
+          record_id: record.record_id,
+          observation: `[conversion] declined ${date} — ${decision.rationale}`,
+          ...(decision.removeCandidacy ? { action_candidate: false } : {}),
+        });
+        console.log(`    -> decline stamped on the record${decision.removeCandidacy ? '; action candidacy removed' : ''}`);
+      }
+    }
+  }
+
+  if (dryRun && results.length) console.log('\nDry run — no issues created, no curation written. Re-run without --dry-run to enforce.');
+  return results;
+}
+
 async function main() {
   const args = process.argv.slice(2);
   const apply = args.includes('--apply');
-  const [mode, target] = args.filter(a => a !== '--apply');
+  const dryRun = args.includes('--dry-run');
+  const [mode, target] = args.filter(a => a !== '--apply' && a !== '--dry-run');
+
+  if (mode === 'convert') {
+    await convertQueue(dryRun);
+    return;
+  }
 
   if (mode === 'verify') {
     if (!target) {
@@ -455,7 +713,7 @@ async function main() {
   }
 
   if (mode !== 'triage') {
-    console.log('Usage: node --env-file=.env agents/fionn.mjs <triage [IDENTIFIER] | decompose IDENTIFIER [--apply] | verify IDENTIFIER>');
+    console.log('Usage: node --env-file=.env agents/fionn.mjs <triage [IDENTIFIER] | decompose IDENTIFIER [--apply] | verify IDENTIFIER | convert [--dry-run]>');
     process.exit(1);
   }
 
@@ -464,7 +722,12 @@ async function main() {
     identifiers = [target.toUpperCase()];
   } else {
     const issues = JSON.parse(await layer('read_issues', { status: 'Triage' }));
-    identifiers = issues.map(i => i.identifier);
+    // LIFE fence (FLX-144): personal-domain issues are the operator's own
+    // triage, never an agent's. The hydrator refuses them anyway; skip
+    // cleanly here instead of erroring one by one.
+    const life = issues.filter(i => i.identifier.startsWith('LIFE-'));
+    if (life.length) console.log(`Skipping ${life.length} LIFE-namespace issue(s) — operator-only triage (FLX-144 fence).`);
+    identifiers = issues.filter(i => !i.identifier.startsWith('LIFE-')).map(i => i.identifier);
   }
 
   if (identifiers.length === 0) {
