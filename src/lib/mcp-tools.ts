@@ -5,7 +5,7 @@ import { getChecklist, parseCriteria } from './fionn/gatekeeper';
 import { computeProductMetrics } from './metrics';
 import { multiIndexSearch } from './search';
 import { upsertDocument } from './documents';
-import { isValidProductStatus, VALID_PRODUCT_STATUSES } from './products';
+import { isValidProductStatus, VALID_PRODUCT_STATUSES, assertValidProductTransition } from './products';
 import { isValidProjectStatus, mintProjectSlug, allowedNextProjectStatuses } from './projects';
 import { hydrateIssueContext } from './fionn/hydrator';
 import { parsePcpPacket, verifyFingerprint, refingerprintPacket, serializePacketFile, renderPcpBriefing } from './pcp';
@@ -756,6 +756,37 @@ export const mcpTools: ToolDef[] = [
       });
       revalidate('/', '/products');
       return text(`Successfully archived product ${archived.name} (${archived.slug})`);
+    }
+  },
+  {
+    name: 'update_product_status',
+    description: 'Update the lifecycle status of a specific product (Concept, Active, Maintenance, Sunset, Archived). Transitions are validated against the product lifecycle graph; an illegal transition is rejected with the allowed next states named. Archiving through this tool is the same soft-delete as archive_product (history preserved, no destructive path).',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        productId: { type: 'string', description: 'The UUID of the product' },
+        productSlug: { type: 'string', description: 'The product slug (e.g. FIONN-AI), as an alternative to productId' },
+        status: { type: 'string', description: 'The next status (Concept, Active, Maintenance, Sunset, Archived)' }
+      },
+      required: ['status']
+    },
+    handler: async (args) => {
+      if (!args?.status) throw new Error('Missing status');
+      const product = await resolveProduct(args ?? {});
+      if (!product) throw new Error('Product not found: provide a valid productId or productSlug');
+
+      assertValidProductTransition(product.status, args.status);
+      if (product.status === args.status) {
+        return text(`Product ${product.name} (${product.slug}) is already ${product.status} — nothing to change`);
+      }
+
+      const updated = await prisma.product.update({
+        where: { id: product.id },
+        data: { status: args.status }
+      });
+
+      revalidate('/', '/products');
+      return text(`Successfully updated product ${updated.name} (${updated.slug}) status to ${updated.status}`);
     }
   },
   {
