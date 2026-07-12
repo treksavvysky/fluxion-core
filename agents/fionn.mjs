@@ -570,6 +570,17 @@ async function convertQueue(dryRun) {
   const results = [];
 
   for (const record of queue) {
+    // Already converted: the record carries a [conversion] <IDENT> stamp but
+    // its lifecycle hasn't closed yet (pre-planning/active are open, so the
+    // queue still serves it). Deterministic skip — re-judging admitted work
+    // wastes a model call and produces noise.
+    const converted = (record.observations || []).map(String).find(o => /^\[conversion\] [A-Z][A-Z0-9-]*-\d+,/.test(o));
+    if (converted) {
+      console.log(`  ${record.record_id}: SKIPPED — already converted (${converted.split(' ')[1].replace(',', '')}); awaiting its lifecycle move out of the queue.`);
+      results.push({ record_id: record.record_id, verdict: 'skipped', reason: 'already converted' });
+      continue;
+    }
+
     const isLife = record.domain === 'life';
 
     // LIFE fence precondition: the product must exist before the first life
