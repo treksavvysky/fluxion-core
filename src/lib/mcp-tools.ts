@@ -1,6 +1,6 @@
 import { prisma } from './prisma';
 import { Prisma } from '@prisma/client';
-import { createNamespacedIssue, assertAllowedTransition, assertNoParentCycle, allowedNextStatuses, VALID_STATUSES } from './issues';
+import { createNamespacedIssue, assertAllowedTransition, assertNoParentCycle, allowedNextStatuses, isValidStatus, VALID_STATUSES, CLOSED_STATUSES } from './issues';
 import { getChecklist, parseCriteria } from './fionn/gatekeeper';
 import { computeProductMetrics } from './metrics';
 import { multiIndexSearch } from './search';
@@ -128,19 +128,49 @@ async function resolveProject(args: { projectId?: string; projectSlug?: string; 
 export const mcpTools: ToolDef[] = [
   {
     name: 'read_issues',
-    description: 'Read the backlog of open issues and tickets inside the Fluxion Core database.',
+    description: 'List issues in the Fluxion Core database. Returns issues of ALL statuses by default — pass openOnly to exclude closed issues (Done, Cancelled), status for one exact status, and productId/productSlug to scope to a single product. Returns summary fields per issue; pass verbose for the full agent-contract bodies, or use read_issue for one issue\'s detail.',
     inputSchema: {
       type: 'object',
       properties: {
-        status: { type: 'string', description: 'Filter by status (e.g., Todo, In Progress)' }
+        status: { type: 'string', description: `Filter by exact status (${VALID_STATUSES.join(', ')})` },
+        openOnly: { type: 'boolean', description: `Exclude closed issues (${CLOSED_STATUSES.join(', ')})` },
+        productId: { type: 'string', description: 'Scope to the product with this UUID' },
+        productSlug: { type: 'string', description: 'Scope to the product with this slug (e.g. FLX), as an alternative to productId' },
+        verbose: { type: 'boolean', description: 'Include the full agent-contract bodies (description, context, acceptanceCriteria, technicalIntent) — large; prefer the default summary when listing' }
       }
     },
     handler: async (args) => {
+      const where: Prisma.IssueWhereInput = {};
+      if (args?.status) {
+        if (!isValidStatus(args.status)) {
+          throw new Error(`Invalid status "${args.status}". Valid statuses: ${VALID_STATUSES.join(', ')}`);
+        }
+        if (args.openOnly && (CLOSED_STATUSES as readonly string[]).includes(args.status)) {
+          throw new Error(`status "${args.status}" is a closed status — it contradicts openOnly. Drop openOnly or pick an open status.`);
+        }
+        where.status = args.status;
+      } else if (args?.openOnly) {
+        where.status = { notIn: [...CLOSED_STATUSES] };
+      }
+      if (args?.productId || args?.productSlug) {
+        const product = await resolveProduct(args);
+        if (!product) throw new Error(`Product not found: "${args.productId ?? args.productSlug}" — provide a valid productId or productSlug`);
+        where.productId = product.id;
+      }
       const issues = await prisma.issue.findMany({
-        where: args?.status ? { status: args.status } : undefined,
-        include: {
+        where,
+        select: {
+          id: true,
+          identifier: true,
+          title: true,
+          status: true,
+          priority: true,
+          createdAt: true,
+          updatedAt: true,
+          product: { select: { slug: true } },
           parent: { select: { identifier: true } },
-          _count: { select: { children: true } }
+          _count: { select: { children: true } },
+          ...(args?.verbose ? { description: true, context: true, acceptanceCriteria: true, technicalIntent: true } : {})
         }
       });
       return json(issues);

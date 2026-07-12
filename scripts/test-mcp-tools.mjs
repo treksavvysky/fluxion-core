@@ -591,6 +591,41 @@ console.log('\n18. archive_repository: soft-delete, restore, exclusion, webhook 
   await prisma.repository.delete({ where: { id: arcRepo.id } });
 }
 
+// --- 19. read_issues filters (FLX-140) ---
+console.log('\n19. read_issues: product scope, openOnly, summary/verbose payload');
+{
+  const prodRI = await prisma.product.create({ data: { slug: `SCR-RI-${Date.now()}`, name: '[SCRATCH] read_issues target' } });
+  const riOpen = await call('create_issue', { title: '[SCRATCH] ri open', description: 'open issue body', productSlug: prodRI.slug });
+  const riOpenId = textOf(riOpen).match(/[A-Z0-9-]+-\d+/)?.[0];
+  const riDone = await call('create_issue', { title: '[SCRATCH] ri done', productSlug: prodRI.slug });
+  const riDoneId = textOf(riDone).match(/[A-Z0-9-]+-\d+/)?.[0];
+  await call('update_issue', { identifier: riDoneId, status: 'Done' });
+
+  const ri1 = JSON.parse(textOf(await call('read_issues', { productSlug: prodRI.slug })));
+  check('product scope returns only that product\'s issues (all statuses)', ri1.length === 2 && ri1.every((i) => i.product?.slug === prodRI.slug), textOf(await call('read_issues', { productSlug: prodRI.slug })).slice(0, 200));
+  check('default payload is summary (no contract bodies)', ri1.every((i) => !('description' in i) && !('context' in i) && !('acceptanceCriteria' in i) && !('technicalIntent' in i)));
+  check('summary keeps identifier/status/priority/child count', ri1.every((i) => i.identifier && i.status && i.priority && typeof i._count?.children === 'number'));
+
+  const ri2 = JSON.parse(textOf(await call('read_issues', { productSlug: prodRI.slug, openOnly: true })));
+  check('openOnly excludes Done/Cancelled', ri2.length === 1 && ri2[0].identifier === riOpenId, JSON.stringify(ri2));
+
+  const ri3 = JSON.parse(textOf(await call('read_issues', { productSlug: prodRI.slug, status: 'Todo', openOnly: true })));
+  check('openOnly composes with an open status filter', ri3.length === 1 && ri3[0].identifier === riOpenId);
+
+  const ri4 = JSON.parse(textOf(await call('read_issues', { productSlug: prodRI.slug, verbose: true })));
+  check('verbose includes contract bodies', ri4.find((i) => i.identifier === riOpenId)?.description === 'open issue body');
+
+  const riE1 = await call('read_issues', { productSlug: 'NOPE-RI' });
+  check('unknown product rejected', !!riE1.error && riE1.error.message.includes('Product not found'), JSON.stringify(riE1.error ?? riE1));
+  const riE2 = await call('read_issues', { status: 'Banana' });
+  check('invalid status rejected with valid set named', !!riE2.error && riE2.error.message.includes('Valid statuses'), JSON.stringify(riE2.error ?? riE2));
+  const riE3 = await call('read_issues', { status: 'Done', openOnly: true });
+  check('contradictory status+openOnly rejected', !!riE3.error && riE3.error.message.includes('contradicts'), JSON.stringify(riE3.error ?? riE3));
+
+  await prisma.issue.deleteMany({ where: { identifier: { in: [riOpenId, riDoneId].filter(Boolean) } } });
+  await prisma.product.delete({ where: { id: prodRI.id } });
+}
+
 // --- Cleanup ---
 await prisma.issue.deleteMany({ where: { identifier: { in: [scratchId, childId, parentId2].filter(Boolean) } } });
 await prisma.document.deleteMany({ where: { title: { startsWith: '[SCRATCH]' } } });

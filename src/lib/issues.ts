@@ -11,6 +11,7 @@ export const WORKSPACE_SLUG = 'FLX';
 // transition graph: Triage is the landing state for unvetted work (e.g.
 // webhook-born issues); terminal states can be reopened explicitly.
 export const VALID_STATUSES = ['Triage', 'Backlog', 'Todo', 'In Progress', 'Done', 'Cancelled'] as const;
+export const CLOSED_STATUSES = ['Done', 'Cancelled'] as const;
 export const VALID_PRIORITIES = ['Low', 'Medium', 'High', 'Critical'] as const;
 
 export const STATUS_TRANSITIONS: Record<string, string[]> = {
