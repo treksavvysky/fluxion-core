@@ -1,0 +1,137 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://cortex.local/pcp/0.2.0/pcp.schema.json",
+  "title": "Project Context Packet v0.2",
+  "description": "A portable, versioned project-truth packet: what a project is, what is true now, what has been decided, and what the next AI coding agent must know before touching code. Successor to PCP Envelope v0.1 (2025).",
+  "type": "object",
+  "required": ["protocol", "version", "project", "currentReality", "provenance"],
+  "additionalProperties": false,
+  "properties": {
+    "protocol": { "const": "pcp" },
+    "version": {
+      "type": "string",
+      "pattern": "^\\d+\\.\\d+\\.\\d+$",
+      "description": "PCP spec version this packet conforms to"
+    },
+    "project": {
+      "type": "object",
+      "required": ["name", "purpose", "status"],
+      "additionalProperties": false,
+      "properties": {
+        "name": { "type": "string", "minLength": 1 },
+        "codename": { "type": "string" },
+        "purpose": { "type": "string", "minLength": 1 },
+        "status": { "enum": ["concept", "active", "paused", "archived"] },
+        "repo": { "type": "string" }
+      }
+    },
+    "currentReality": {
+      "type": "object",
+      "required": ["summary"],
+      "additionalProperties": false,
+      "properties": {
+        "summary": { "type": "string", "minLength": 1 },
+        "implemented": { "type": "array", "items": { "type": "string" } },
+        "notImplemented": { "type": "array", "items": { "type": "string" } },
+        "knownIssues": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "decisions": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "summary", "status"],
+        "additionalProperties": false,
+        "properties": {
+          "id": { "type": "string", "minLength": 1 },
+          "summary": { "type": "string", "minLength": 1 },
+          "rationale": { "type": "string" },
+          "date": { "type": "string", "format": "date" },
+          "status": { "enum": ["active", "superseded", "uncertain"] }
+        }
+      }
+    },
+    "constraints": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "summary", "kind"],
+        "additionalProperties": false,
+        "properties": {
+          "id": { "type": "string", "minLength": 1 },
+          "summary": { "type": "string", "minLength": 1 },
+          "kind": { "enum": ["technical", "strategic", "operational", "design"] }
+        }
+      }
+    },
+    "activeIntent": {
+      "type": "object",
+      "required": ["title", "description", "desiredOutcome"],
+      "additionalProperties": false,
+      "properties": {
+        "title": { "type": "string", "minLength": 1 },
+        "description": { "type": "string" },
+        "desiredOutcome": { "type": "string" }
+      }
+    },
+    "nextActions": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "summary", "priority"],
+        "additionalProperties": false,
+        "properties": {
+          "id": { "type": "string", "minLength": 1 },
+          "summary": { "type": "string", "minLength": 1 },
+          "priority": { "enum": ["low", "medium", "high"] }
+        }
+      }
+    },
+    "boundaries": {
+      "type": "object",
+      "required": ["inScope", "outOfScope"],
+      "additionalProperties": false,
+      "properties": {
+        "inScope": { "type": "array", "items": { "type": "string" } },
+        "outOfScope": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "agentBrief": {
+      "type": "object",
+      "required": ["instructions"],
+      "additionalProperties": false,
+      "properties": {
+        "instructions": { "type": "string", "minLength": 1 },
+        "risks": { "type": "array", "items": { "type": "string" } },
+        "verificationCommands": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "provenance": {
+      "type": "object",
+      "required": ["createdAt", "updatedAt"],
+      "additionalProperties": false,
+      "properties": {
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" },
+        "sources": { "type": "array", "items": { "type": "string" } },
+        "fingerprint": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$",
+          "description": "sha256 of the canonical packet content, excluding this field"
+        },
+        "changelog": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["date", "summary"],
+            "additionalProperties": false,
+            "properties": {
+              "date": { "type": "string", "format": "date" },
+              "summary": { "type": "string", "minLength": 1 }
+            }
+          }
+        }
+      }
+    }
+  }
+}

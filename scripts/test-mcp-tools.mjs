@@ -35,7 +35,7 @@ const textOf = (r) => r?.result?.content?.[0]?.text ?? '';
 console.log('1. tools/list (HTTP surface, previously drifted to 13 tools)');
 const list = await rpc('tools/list');
 const names = (list?.result?.tools ?? []).map((t) => t.name);
-check('37 tools listed', names.length === 37, `got ${names.length}: ${names.join(', ')}`);
+check('38 tools listed', names.length === 38, `got ${names.length}: ${names.join(', ')}`);
 for (const t of ['update_issue', 'search', 'read_product_metrics', 'archive_product', 'update_product_status', 'read_document', 'write_document', 'create_change_log', 'query_telemetry', 'read_issue', 'read_project', 'read_governing_context', 'hydrate_issue_context', 'decompose_issue', 'check_criterion', 'read_cycle', 'create_cycle', 'update_cycle_status', 'update_project_status', 'brief_pcp_packet', 'refingerprint_pcp_packet', 'read_product_commits', 'update_repository', 'archive_repository']) {
   check(`${t} present`, names.includes(t));
 }
@@ -379,6 +379,79 @@ const rf2 = await call('refingerprint_pcp_packet', { content: rf1res.fileContent
 check('refingerprint is idempotent for fixed updatedAt', JSON.parse(textOf(rf2)).fingerprint === rf1res.fingerprint);
 const rf3 = await call('refingerprint_pcp_packet', { content: JSON.stringify({ protocol: 'pcp' }) });
 check('refingerprint validates schema first', !!rf3.error && rf3.error.message.includes('missing required'), JSON.stringify(rf3.error ?? rf3));
+
+// --- 14b. Cognition Project Context Packet dual-contract support (CLARITY-EN-3) ---
+const cognitionPacket = {
+  protocol: 'pcp',
+  version: '0.2.0',
+  project: {
+    name: 'clarity-test',
+    codename: 'project-sovereign',
+    purpose: 'Deterministic dual-contract PCP verification',
+    status: 'active',
+    repo: '~/cognition/clarity-engine',
+  },
+  currentReality: {
+    summary: 'Testing dual PCP support in Fluxion Core',
+    implemented: ['Dual schema validation', 'Native fingerprint parity'],
+    notImplemented: ['Autonomous self-replication', 'Telepathic routing'],
+    knownIssues: ['Legacy clients may supply outdated fingerprints'],
+  },
+  decisions: [
+    { id: 'dec-1', summary: 'Support dual contracts via discriminant', status: 'active', date: '2026-09-07', rationale: 'Prevent migration churn' },
+    { id: 'dec-2', summary: 'Experimental quantum routing', status: 'uncertain', date: '2026-09-07' },
+  ],
+  constraints: [
+    { id: 'con-1', summary: 'Do not mutate repositories directly', kind: 'operational' },
+  ],
+  boundaries: {
+    inScope: ['Ingest cognition and handoff contracts'],
+    outOfScope: ['Arbitrary schema evolution', 'Unversioned mutations'],
+  },
+  agentBrief: {
+    instructions: 'Follow the acceptance criteria strictly',
+    risks: ['Silent drift between schemas'],
+    verificationCommands: ['node scripts/test-mcp-tools.mjs'],
+  },
+  provenance: {
+    createdAt: '2026-09-07T12:00:00.000Z',
+    updatedAt: '2026-09-07T14:00:00.000Z',
+    sources: ['CLARITY-EN-3 context packet', 'START-HERE.md'],
+    fingerprint: '3a55bca9495b9c704efc39bf83e9ea7173e2a532320b3346d03d420aa2286950', // with agentBrief
+  },
+};
+
+// First, compute the canonical fingerprint for this fixture
+const rfInit = await call('refingerprint_pcp_packet', { content: JSON.stringify(cognitionPacket), updatedAt: '2026-09-07T14:00:00.000Z' });
+const rfInitRes = JSON.parse(textOf(rfInit));
+cognitionPacket.provenance.fingerprint = rfInitRes.fingerprint;
+
+const cpb1 = await call('brief_pcp_packet', { content: JSON.stringify(cognitionPacket) });
+const cpb1Text = textOf(cpb1);
+check('cognition packet briefs with title + project details', cpb1Text.startsWith('# PCP Briefing — clarity-test (Project Context Packet v0.2.0)') && cpb1Text.includes('project-sovereign'), JSON.stringify(cpb1.error ?? '').slice(0, 300));
+check('cognition briefing warns on notImplemented', cpb1Text.includes('Not Implemented (Warning: Do NOT assume these capabilities have shipped)'), 'missing notImplemented warning');
+check('cognition briefing highlights uncertain decisions', cpb1Text.includes('**UNCERTAIN / UNRATIFIED**'), 'missing uncertainty highlight');
+check('cognition briefing guards out-of-scope boundaries', cpb1Text.includes('Out of scope (Authorization Guard: do not implement or alter)'), 'missing boundary guard');
+
+const cpb2 = await call('brief_pcp_packet', { content: JSON.stringify({ ...cognitionPacket, provenance: { ...cognitionPacket.provenance, fingerprint: '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef' } }) });
+check('tampered cognition fingerprint refused', !!cpb2.error && cpb2.error.message.includes('fingerprint mismatch'), JSON.stringify(cpb2.error ?? cpb2));
+
+const cpb3 = await call('brief_pcp_packet', { content: JSON.stringify({ ...cognitionPacket, rogue_property: 123 }) });
+check('cognition schema violation refused (additionalProperties)', !!cpb3.error && cpb3.error.message.includes('rogue_property'), JSON.stringify(cpb3.error ?? cpb3));
+
+const cpb4 = await call('brief_pcp_packet', { content: JSON.stringify({ ...cognitionPacket, decisions: [{ id: 'dec-1', summary: 'test', status: 'invalid_status' }] }) });
+check('cognition invalid enum rejected', !!cpb4.error && cpb4.error.message.includes('must be one of'), JSON.stringify(cpb4.error ?? cpb4));
+
+const rfCog = await call('refingerprint_pcp_packet', { content: JSON.stringify(cognitionPacket), updatedAt: '2026-09-07T15:00:00.000Z' });
+const rfCogRes = JSON.parse(textOf(rfCog));
+check('refingerprint cognition packet returns new fingerprint + updated_at + file content', rfCogRes.fingerprint?.length === 64 && rfCogRes.fingerprint !== cognitionPacket.provenance.fingerprint && rfCogRes.updated_at === '2026-09-07T15:00:00.000Z' && rfCogRes.fileContent?.endsWith('\n'), textOf(rfCog).slice(0, 200));
+
+const cpb5 = await call('brief_pcp_packet', { content: rfCogRes.fileContent });
+check('refingerprinted cognition file content round-trips through brief', textOf(cpb5).includes('Testing dual PCP support in Fluxion Core'), JSON.stringify(cpb5.error ?? '').slice(0, 300));
+
+const rfCog2 = await call('refingerprint_pcp_packet', { content: rfCogRes.fileContent, updatedAt: '2026-09-07T15:00:00.000Z' });
+check('refingerprint cognition packet is idempotent for fixed updatedAt', JSON.parse(textOf(rfCog2)).fingerprint === rfCogRes.fingerprint);
+
 
 // --- 15. Per-agent key identity attribution (FLX-133) ---
 console.log('\n15. per-agent keys: server-stamped attribution');

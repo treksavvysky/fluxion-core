@@ -8,7 +8,7 @@ import { upsertDocument } from './documents';
 import { isValidProductStatus, VALID_PRODUCT_STATUSES, assertValidProductTransition } from './products';
 import { isValidProjectStatus, mintProjectSlug, allowedNextProjectStatuses } from './projects';
 import { hydrateIssueContext } from './fionn/hydrator';
-import { parsePcpPacket, verifyFingerprint, refingerprintPacket, serializePacketFile, renderPcpBriefing } from './pcp';
+import { parsePcpPacket, verifyFingerprint, refingerprintPacket, serializePacketFile, renderPcpBriefing, isProjectPacket } from './pcp';
 import { updateRepository, archiveRepository } from './repositories';
 import { revalidatePath } from 'next/cache';
 
@@ -1258,7 +1258,7 @@ export const mcpTools: ToolDef[] = [
   },
   {
     name: 'brief_pcp_packet',
-    description: 'PCP Git Branch Handoff (launch stage): validate the raw content of a repository\'s pcp/context.json against the PCP v0.2 packet schema, verify its SHA-256 fingerprint, and return a read-only briefing markdown block to inject into the executing agent\'s prompt. Fluxion never reads repositories itself — the caller reads the file from its own clone and passes the content here.',
+    description: 'PCP briefing tool (launch stage): validate the raw content of a repository\'s pcp/context.json against PCP v0.2 schemas (supporting both Cognition Project Context Packets and Git Branch Handoff Envelopes), verify its SHA-256 fingerprint, and return a read-only briefing markdown block to inject into the executing agent\'s prompt. Fluxion never reads repositories itself — the caller reads the file from its own clone and passes the content here.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -1278,7 +1278,7 @@ export const mcpTools: ToolDef[] = [
   },
   {
     name: 'refingerprint_pcp_packet',
-    description: 'PCP Git Branch Handoff (finalization stage): validate an updated pcp/context.json packet, recompute its SHA-256 fingerprint (and stamp updated_at), and return the exact file content to write back. The caller writes the file into its local clone and commits it to the active feature branch for human PR review — Fluxion never touches the repository.',
+    description: 'PCP re-fingerprint tool (finalization stage): validate an updated pcp/context.json packet (supporting both Cognition Project Context Packets and Git Branch Handoff Envelopes), recompute its SHA-256 fingerprint (and stamp updated_at), and return the exact file content to write back. The caller writes the file into its local clone and commits it to the active feature branch (never main/master) for human PR review — Fluxion never touches the repository.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -1292,9 +1292,12 @@ export const mcpTools: ToolDef[] = [
       const packet = parsePcpPacket(args.content);
       const updatedAt = (typeof args.updatedAt === 'string' && args.updatedAt.trim()) || new Date().toISOString();
       const next = refingerprintPacket(packet, updatedAt);
+      const isProject = isProjectPacket(next);
+      const fingerprint = isProject ? next.provenance.fingerprint : next.fingerprint;
+      const updated_at = isProject ? next.provenance.updatedAt : next.updated_at;
       return json({
-        fingerprint: next.fingerprint,
-        updated_at: next.updated_at,
+        fingerprint,
+        updated_at,
         instructions: 'Write fileContent verbatim to pcp/context.json in your local clone, then commit it to the active feature branch (never main/master) for PR review.',
         fileContent: serializePacketFile(next),
       });
