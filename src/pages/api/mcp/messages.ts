@@ -8,7 +8,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   // Validate API key (shared or per-agent); fails closed when none is
   // configured. Identity is NOT taken from this request — it was bound to
   // the session at the SSE handshake, so a message POST cannot re-attribute
-  // an existing session.
+  // an existing session. 401 is reserved for a missing or wrong key.
   const raw = req.headers['x-api-key'] || req.query.token || req.query['api-key'];
   const providedKey = Array.isArray(raw) ? raw[0] : raw;
   if (!resolveIdentity(providedKey).authorized) {
@@ -21,13 +21,18 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const sessionId = typeof req.query.sessionId === 'string' ? req.query.sessionId : undefined;
   const transport = getTransport(sessionId);
 
+  // An unknown session is "not found", never an auth failure (FLX-146):
+  // sessions live in process memory, so every restart strands clients still
+  // holding an old endpoint. A 401 would send MCP clients into OAuth
+  // discovery; a 404 tells them the session is gone and to re-open the
+  // SSE stream.
   if (!transport) {
-    const detail = transportCount() === 0
-      ? 'No active SSE connection'
-      : sessionId
-        ? `No active SSE session for sessionId ${sessionId} (and multiple sessions are live, so healing is ambiguous)`
-        : 'Multiple active SSE sessions; sessionId query parameter is required';
-    return res.status(400).send(detail);
+    if (!sessionId && transportCount() > 1) {
+      return res.status(400).json({ error: 'Multiple active SSE sessions; sessionId query parameter is required' });
+    }
+    return res.status(404).json({
+      error: `MCP session not found${sessionId ? `: ${sessionId}` : ''} (expired, or the server restarted). Reconnect the SSE stream at GET /api/mcp for a new session.`,
+    });
   }
 
   try {
