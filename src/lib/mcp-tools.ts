@@ -5,7 +5,7 @@ import { getChecklist, parseCriteria } from './fionn/gatekeeper';
 import { computeProductMetrics } from './metrics';
 import { multiIndexSearch } from './search';
 import { upsertDocument } from './documents';
-import { isValidProductStatus, VALID_PRODUCT_STATUSES, assertValidProductTransition } from './products';
+import { isValidProductStatus, VALID_PRODUCT_STATUSES, assertValidProductTransition, updateProductDetails } from './products';
 import { isValidProjectStatus, mintProjectSlug, allowedNextProjectStatuses } from './projects';
 import { hydrateIssueContext } from './fionn/hydrator';
 import { parsePcpPacket, verifyFingerprint, refingerprintPacket, serializePacketFile, renderPcpBriefing, isProjectPacket } from './pcp';
@@ -816,6 +816,26 @@ export const mcpTools: ToolDef[] = [
       });
       revalidate('/', '/products');
       return text(`Successfully archived product ${archived.name} (${archived.slug})`);
+    }
+  },
+  {
+    name: 'update_product',
+    description: 'Update a product\'s name and/or description (partial: omitted fields are left unchanged; pass an empty description to clear it). Identify the product by UUID or slug. Archived products are read-only and are rejected. Product descriptions feed read_product_briefs and Fionn context hydration, so keep them current; consider recording significant changes in change control (Config Change) with productId scope.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        productId: { type: 'string', description: 'The UUID of the product' },
+        productSlug: { type: 'string', description: 'The product slug (e.g. FLX), as an alternative to productId' },
+        name: { type: 'string', description: 'New product name' },
+        description: { type: 'string', description: 'New product description (replaces the whole description)' }
+      }
+    },
+    handler: async (args) => {
+      const product = await resolveProduct(args ?? {});
+      if (!product) throw new Error('Product not found: provide a valid productId or productSlug');
+      const { updated, changed } = await updateProductDetails(product.id, { name: args?.name, description: args?.description });
+      revalidate('/', '/products', `/products/${updated.slug}`);
+      return text(`Successfully updated product ${updated.name} (${updated.slug}): ${changed.join(', ')}`);
     }
   },
   {

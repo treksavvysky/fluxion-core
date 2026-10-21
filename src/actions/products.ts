@@ -3,7 +3,7 @@
 import { prisma } from '@/lib/prisma';
 import { revalidatePath } from 'next/cache';
 import { computeProductMetrics } from '@/lib/metrics';
-import { assertValidProductTransition } from '@/lib/products';
+import { assertValidProductTransition, updateProductDetails, type ProductDetailUpdates } from '@/lib/products';
 
 export async function getProducts() {
   return prisma.product.findMany({
@@ -55,27 +55,11 @@ export async function createProduct(data: { name: string; slug: string; descript
   return product;
 }
 
-export async function updateProduct(id: string, data: { name: string; description?: string }) {
-  const existing = await prisma.product.findUnique({ where: { id } });
-  if (!existing) {
-    throw new Error('Product not found');
-  }
-
-  // Soft-deletion rule: Archived products are read-only!
-  if (existing.status === 'Archived') {
-    throw new Error('Archived products are read-only and cannot be modified');
-  }
-
-  const product = await prisma.product.update({
-    where: { id },
-    data: {
-      name: data.name,
-      description: data.description || null
-    }
-  });
-
+export async function updateProduct(id: string, data: ProductDetailUpdates) {
+  const { updated } = await updateProductDetails(id, data);
   revalidatePath('/products');
-  return product;
+  revalidatePath(`/products/${updated.slug}`);
+  return updated;
 }
 
 export async function archiveProduct(id: string) {

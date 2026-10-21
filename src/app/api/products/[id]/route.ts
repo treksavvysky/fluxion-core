@@ -25,8 +25,8 @@ export async function PUT(req: Request, { params }: { params: Promise<{ id: stri
     }
     const { name, description } = body;
 
-    if (!name) {
-      return NextResponse.json({ error: 'Name is required' }, { status: 400 });
+    if (name === undefined && description === undefined) {
+      return NextResponse.json({ error: 'Provide name and/or description' }, { status: 400 });
     }
 
     const updated = await updateProduct(id, { name, description });
