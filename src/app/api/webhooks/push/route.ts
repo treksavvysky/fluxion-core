@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { revalidatePath } from 'next/cache';
-import { isAuthorized, resolveIdentity, unauthorizedResponse } from '@/lib/api-auth';
+import { restGuard } from '@/lib/api-auth';
 import { ingestPush, type PushPayload } from '@/lib/commits';
 
 // Push-event ingest (FLX-119). Accepts either a native GitHub push webhook
@@ -40,9 +40,8 @@ export async function POST(req: Request) {
   try {
     const body = await req.json();
     const queryToken = new URL(req.url).searchParams.get('token');
-    if (!isAuthorized(req, body?.apiKey) && !resolveIdentity(queryToken).authorized) {
-      return unauthorizedResponse();
-    }
+    const denied = restGuard(req, body?.apiKey, queryToken);
+    if (denied) return denied;
 
     const summary = await ingestPush(normalize(body));
     revalidatePath('/');

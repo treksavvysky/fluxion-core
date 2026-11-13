@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { getProducts, createProduct } from '@/actions/products';
-import { isAuthorized, unauthorizedResponse } from '@/lib/api-auth';
+import { restGuard } from '@/lib/api-auth';
 
 export async function GET() {
   try {
@@ -15,9 +15,8 @@ export async function GET() {
 export async function POST(req: Request) {
   try {
     const body = await req.json();
-    if (!isAuthorized(req, body?.apiKey)) {
-      return unauthorizedResponse();
-    }
+    const denied = restGuard(req, body?.apiKey);
+    if (denied) return denied;
     const { name, slug, description } = body;
 
     if (!name || !slug) {

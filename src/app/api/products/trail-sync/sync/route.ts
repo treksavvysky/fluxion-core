@@ -6,15 +6,14 @@ import {
   getRecentBatches,
   TrailSyncValidationError,
 } from '@/lib/trail-sync';
-import { isAuthorized, unauthorizedResponse } from '@/lib/api-auth';
+import { restGuard } from '@/lib/api-auth';
 
 export async function POST(req: Request) {
   try {
     const body = await req.json();
 
-    if (!isAuthorized(req, body?.apiKey)) {
-      return unauthorizedResponse();
-    }
+    const denied = restGuard(req, body?.apiKey);
+    if (denied) return denied;
 
     const batchRequest = validateBatchRequest(body);
     console.log(
@@ -47,9 +46,8 @@ export async function POST(req: Request) {
 
 export async function GET(req: Request) {
   try {
-    if (!isAuthorized(req)) {
-      return unauthorizedResponse();
-    }
+    const denied = restGuard(req);
+    if (denied) return denied;
     const batches = await getRecentBatches();
     return NextResponse.json(batches, { status: 200 });
   } catch (error: unknown) {

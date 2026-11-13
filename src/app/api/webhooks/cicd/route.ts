@@ -1,16 +1,15 @@
 import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/prisma';
 import { revalidatePath } from 'next/cache';
-import { isAuthorized, unauthorizedResponse } from '@/lib/api-auth';
+import { restGuard } from '@/lib/api-auth';
 import { createNamespacedIssue } from '@/lib/issues';
 import { computeSignature } from '@/lib/fionn/signature';
 
 export async function POST(req: Request) {
   try {
     const body = await req.json();
-    if (!isAuthorized(req, body?.apiKey)) {
-      return unauthorizedResponse();
-    }
+    const denied = restGuard(req, body?.apiKey);
+    if (denied) return denied;
 
     // Ensure we only ingest failures
     if (!body || body.status !== 'failure') {

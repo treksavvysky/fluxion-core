@@ -71,12 +71,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         return res.status(200).json({
           jsonrpc: '2.0',
           id,
-          result: { tools: listToolSchemas() }
+          result: { tools: listToolSchemas(auth.access) }
         });
       }
 
       if (method === 'tools/call') {
-        const result = await callTool(request.params?.name, request.params?.arguments, { identity: auth.identity });
+        const result = await callTool(request.params?.name, request.params?.arguments, { identity: auth.identity, access: auth.access });
         return res.status(200).json({ jsonrpc: '2.0', id, result });
       }
 
@@ -122,7 +122,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   // sessionId=<uuid> to the advertised messages endpoint automatically.
   // The identity resolved at the handshake is bound to the session for its
   // lifetime — message POSTs authenticate but cannot re-attribute it.
-  const server = createMcpServer(auth.identity);
+  const server = createMcpServer(auth.identity, auth.access);
   const transport = new SSEServerTransport(`/api/mcp/messages?token=${providedKey || ''}`, res as unknown as ServerResponse);
   addTransport(transport);
 
