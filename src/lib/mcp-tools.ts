@@ -11,6 +11,7 @@ import { hydrateIssueContext } from './fionn/hydrator';
 import { parsePcpPacket, verifyFingerprint, refingerprintPacket, serializePacketFile, renderPcpBriefing, isProjectPacket } from './pcp';
 import { updateRepository, archiveRepository } from './repositories';
 import { revalidatePath } from 'next/cache';
+import { DEFAULT_ACCESS, PERSONAL_PRODUCT_SLUG, requiredTier, tierAllows, toolVisible, type Access } from './access';
 
 // Single source of truth for the MCP tool surface. Both servers — the SSE
 // server (src/lib/mcp.ts) and the stateless HTTP JSON-RPC handler
@@ -28,7 +29,58 @@ export interface ToolResult {
 // with a per-agent key; undefined for the legacy shared FLUXION_API_KEY.
 export interface ToolContext {
   identity?: string;
+  // Tier and personal-domain flag (FLX-149), from src/lib/access.ts. Absent means the
+  // default: full tier, no personal access.
+  access?: Access;
 }
+
+function accessOf(ctx: ToolContext): Access {
+  return ctx.access ?? DEFAULT_ACCESS;
+}
+
+// --- Personal-domain fence (FLX-149, LIFE Boundaries brief) -------------------------------
+// For a caller without the personal flag, the LIFE product does not exist: calls that name it
+// (or one of its issues, projects or documents) are refused, and lists leave it out.
+
+const PERSONAL_REFUSAL = `This key may not access the ${PERSONAL_PRODUCT_SLUG} product (personal domain; FLX-149).`;
+
+// The LIFE product's id when this caller must not see it; null when it may, or LIFE doesn't exist.
+async function hiddenProductId(ctx: ToolContext): Promise<string | null> {
+  if (accessOf(ctx).personal) return null;
+  const p = await prisma.product.findUnique({ where: { slug: PERSONAL_PRODUCT_SLUG }, select: { id: true } });
+  return p?.id ?? null;
+}
+
+// Prisma's `not` leaves out NULLs, so unassigned rows are kept explicitly.
+function outsideProduct(hidden: string) {
+  return { OR: [{ productId: null }, { productId: { not: hidden } }] };
+}
+
+/* eslint-disable @typescript-eslint/no-explicit-any */
+async function namesHiddenProduct(tool: string, args: any, hidden: string): Promise<boolean> {
+  const a = args ?? {};
+  if (a.issueId || a.identifier) {
+    const issue = await resolveIssue(a);
+    if (issue?.productId === hidden) return true;
+  }
+  if (typeof a.parentIdentifier === 'string' && a.parentIdentifier.trim() && a.parentIdentifier.trim().toLowerCase() !== 'none') {
+    const parent = await prisma.issue.findUnique({ where: { identifier: a.parentIdentifier.toUpperCase().trim() }, select: { productId: true } });
+    if (parent?.productId === hidden) return true;
+  }
+  if (a.productId === hidden) return true;
+  if (typeof a.productSlug === 'string' && a.productSlug.toUpperCase().trim() === PERSONAL_PRODUCT_SLUG) return true;
+  const projectRef = a.projectId || a.projectSlug || (tool.includes('project') ? a.slug : undefined);
+  if (projectRef) {
+    const project = await resolveProject(tool.includes('project') ? a : { projectId: a.projectId, projectSlug: a.projectSlug });
+    if (project?.productId === hidden) return true;
+  }
+  if ((tool === 'read_document' || tool === 'write_document') && typeof a.slug === 'string') {
+    const doc = await prisma.document.findUnique({ where: { slug: a.slug }, select: { productId: true } });
+    if (doc?.productId === hidden) return true;
+  }
+  return false;
+}
+/* eslint-enable @typescript-eslint/no-explicit-any */
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 export interface ToolDef {
@@ -139,7 +191,7 @@ export const mcpTools: ToolDef[] = [
         verbose: { type: 'boolean', description: 'Include the full agent-contract bodies (description, context, acceptanceCriteria, technicalIntent) — large; prefer the default summary when listing' }
       }
     },
-    handler: async (args) => {
+    handler: async (args, ctx) => {
       const where: Prisma.IssueWhereInput = {};
       if (args?.status) {
         if (!isValidStatus(args.status)) {
@@ -157,6 +209,8 @@ export const mcpTools: ToolDef[] = [
         if (!product) throw new Error(`Product not found: "${args.productId ?? args.productSlug}" — provide a valid productId or productSlug`);
         where.productId = product.id;
       }
+      const hidden = await hiddenProductId(ctx);
+      if (hidden) Object.assign(where, outsideProduct(hidden));
       const issues = await prisma.issue.findMany({
         where,
         select: {
@@ -506,10 +560,25 @@ export const mcpTools: ToolDef[] = [
       },
       required: ['query']
     },
-    handler: async (args) => {
+    handler: async (args, ctx) => {
       if (!args?.query || typeof args.query !== 'string') throw new Error('Missing query');
       const take = typeof args.limit === 'number' && args.limit > 0 ? Math.min(args.limit, 50) : 10;
       const results = await multiIndexSearch(args.query, take);
+      const hidden = await hiddenProductId(ctx);
+      if (hidden) {
+        const [issues, documents, changeLogs] = await Promise.all([
+          prisma.issue.findMany({ where: { id: { in: results.issues.map(i => i.id) }, productId: hidden }, select: { id: true } }),
+          prisma.document.findMany({ where: { id: { in: results.documents.map(d => d.id) }, productId: hidden }, select: { id: true } }),
+          prisma.changeLog.findMany({
+            where: { id: { in: results.changeLogs.map(c => c.id) }, OR: [{ productId: hidden }, { issue: { productId: hidden } }] },
+            select: { id: true },
+          }),
+        ]);
+        const drop = new Set([...issues, ...documents, ...changeLogs].map(r => r.id));
+        results.issues = results.issues.filter(i => !drop.has(i.id));
+        results.documents = results.documents.filter(d => !drop.has(d.id));
+        results.changeLogs = results.changeLogs.filter(c => !drop.has(c.id));
+      }
       return json(results);
     }
   },
@@ -532,7 +601,7 @@ export const mcpTools: ToolDef[] = [
         cycleSlug: { type: 'string', description: 'The slug of the cycle (e.g. sprint-24), as an alternative to cycleId' }
       }
     },
-    handler: async (args) => {
+    handler: async (args, ctx) => {
       const cycle = await resolveCycle(args);
       if (!cycle) throw new Error('Cycle not found: provide a valid cycleId or cycleSlug');
 
@@ -567,6 +636,12 @@ export const mcpTools: ToolDef[] = [
           }
         }
       });
+      const hidden = await hiddenProductId(ctx);
+      if (hidden && fullCycle) {
+        const hiddenDocs = new Set((await prisma.document.findMany({ where: { cycleId: fullCycle.id, productId: hidden }, select: { id: true } })).map(d => d.id));
+        fullCycle.issues = fullCycle.issues.filter(issue => issue.productId !== hidden);
+        fullCycle.documents = fullCycle.documents.filter(d => !hiddenDocs.has(d.id));
+      }
       return json(fullCycle);
     }
   },
@@ -665,8 +740,9 @@ export const mcpTools: ToolDef[] = [
     name: 'read_roadmaps',
     description: 'Read the strategic roadmaps and epics.',
     inputSchema: { type: 'object', properties: {} },
-    handler: async () => {
-      const roadmaps = await prisma.roadmap.findMany({ orderBy: { createdAt: 'desc' } });
+    handler: async (args, ctx) => {
+      const hidden = await hiddenProductId(ctx);
+      const roadmaps = await prisma.roadmap.findMany({ where: hidden ? outsideProduct(hidden) : undefined, orderBy: { createdAt: 'desc' } });
       return json(roadmaps);
     }
   },
@@ -696,14 +772,15 @@ export const mcpTools: ToolDef[] = [
     name: 'read_products',
     description: 'Read the list of products from the Fluxion Core database.',
     inputSchema: { type: 'object', properties: {} },
-    handler: async () => {
+    handler: async (args, ctx) => {
       const products = await prisma.product.findMany({
         orderBy: { createdAt: 'desc' },
         include: {
           _count: { select: { projects: true, repos: true, issues: true } }
         }
       });
-      return json(products);
+      const hidden = await hiddenProductId(ctx);
+      return json(hidden ? products.filter(p => p.id !== hidden) : products);
     }
   },
   {
@@ -715,7 +792,7 @@ export const mcpTools: ToolDef[] = [
         productSlug: { type: 'string', description: 'Optional product slug to fetch a single product\'s briefs' }
       }
     },
-    handler: async (args) => {
+    handler: async (args, ctx) => {
       const products = await prisma.product.findMany({
         where: args?.productSlug ? { slug: String(args.productSlug).toUpperCase() } : undefined,
         orderBy: { createdAt: 'asc' },
@@ -726,7 +803,8 @@ export const mcpTools: ToolDef[] = [
       if (args?.productSlug && products.length === 0) {
         throw new Error(`Product not found: ${args.productSlug}`);
       }
-      return json(products.map(p => ({
+      const hidden = await hiddenProductId(ctx);
+      return json(products.filter(p => p.id !== hidden).map(p => ({
         slug: p.slug,
         name: p.name,
         status: p.status,
@@ -873,8 +951,10 @@ export const mcpTools: ToolDef[] = [
     name: 'read_projects',
     description: 'Read the list of active or upcoming projects (temporal milestones).',
     inputSchema: { type: 'object', properties: {} },
-    handler: async () => {
+    handler: async (args, ctx) => {
+      const hidden = await hiddenProductId(ctx);
       const projects = await prisma.project.findMany({
+        where: hidden ? outsideProduct(hidden) : undefined,
         orderBy: { createdAt: 'desc' },
         include: {
           product: { select: { name: true } },
@@ -1201,7 +1281,7 @@ export const mcpTools: ToolDef[] = [
         type: { type: 'string', description: 'Filter by type: builds, environments, activities' }
       }
     },
-    handler: async (args) => {
+    handler: async (args, ctx) => {
       const type = args?.type;
       const results: Record<string, unknown> = {};
       if (!type || type === 'environments') {
@@ -1211,7 +1291,14 @@ export const mcpTools: ToolDef[] = [
         results.builds = await prisma.build.findMany({ orderBy: { createdAt: 'desc' }, take: 10, include: { repo: true } });
       }
       if (!type || type === 'activities') {
-        results.activities = await prisma.activityLog.findMany({ orderBy: { createdAt: 'desc' }, take: 10 });
+        // Activity lines name their issue in `target` (e.g. LIFE-3), so LIFE activity is left out
+        // for callers without the personal flag.
+        const hidden = await hiddenProductId(ctx);
+        results.activities = await prisma.activityLog.findMany({
+          where: hidden ? { NOT: { target: { startsWith: `${PERSONAL_PRODUCT_SLUG}-` } } } : undefined,
+          orderBy: { createdAt: 'desc' },
+          take: 10,
+        });
       }
       return json(results);
     }
@@ -1325,13 +1412,23 @@ export const mcpTools: ToolDef[] = [
   }
 ];
 
-export function listToolSchemas() {
-  return mcpTools.map(({ name, description, inputSchema }) => ({ name, description, inputSchema }));
+// Only the tools this caller's tier allows are listed (FLX-149).
+export function listToolSchemas(access: Access = DEFAULT_ACCESS) {
+  return mcpTools
+    .filter(({ name }) => toolVisible(access, name))
+    .map(({ name, description, inputSchema }) => ({ name, description, inputSchema }));
 }
 
 export async function callTool(name: string, args: unknown, ctx: ToolContext = {}): Promise<ToolResult> {
   const tool = mcpTools.find(t => t.name === name);
   if (!tool) throw new Error(`Tool not found: ${name}`);
+  const access = accessOf(ctx);
+  const needed = requiredTier(name, args);
+  if (!tierAllows(access, needed)) {
+    throw new Error(`${name} is not available to this key: this call needs the ${needed} tier, and the key has the ${access.tier} tier (FLX-149).`);
+  }
+  const hidden = await hiddenProductId(ctx);
+  if (hidden && await namesHiddenProduct(name, args, hidden)) throw new Error(PERSONAL_REFUSAL);
   return tool.handler(args ?? {}, ctx);
 }
 

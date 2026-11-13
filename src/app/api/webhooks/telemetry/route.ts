@@ -2,14 +2,13 @@ import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/prisma';
 import { revalidatePath } from 'next/cache';
 import { triggerAutomationEvent } from '@/actions/automation';
-import { isAuthorized, unauthorizedResponse } from '@/lib/api-auth';
+import { restGuard } from '@/lib/api-auth';
 
 export async function POST(req: Request) {
   try {
     const body = await req.json();
-    if (!isAuthorized(req, body?.apiKey)) {
-      return unauthorizedResponse();
-    }
+    const denied = restGuard(req, body?.apiKey);
+    if (denied) return denied;
 
     const { type, payload } = body;
     if (!type || !payload) {

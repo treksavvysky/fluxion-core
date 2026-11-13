@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { updateProduct, archiveProduct, getProductById } from '@/actions/products';
-import { isAuthorized, unauthorizedResponse } from '@/lib/api-auth';
+import { restGuard } from '@/lib/api-auth';
 
 export async function GET(req: Request, { params }: { params: Promise<{ id: string }> }) {
   try {
@@ -20,9 +20,8 @@ export async function PUT(req: Request, { params }: { params: Promise<{ id: stri
   try {
     const { id } = await params;
     const body = await req.json();
-    if (!isAuthorized(req, body?.apiKey)) {
-      return unauthorizedResponse();
-    }
+    const denied = restGuard(req, body?.apiKey);
+    if (denied) return denied;
     const { name, description } = body;
 
     if (name === undefined && description === undefined) {
@@ -39,9 +38,8 @@ export async function PUT(req: Request, { params }: { params: Promise<{ id: stri
 
 export async function DELETE(req: Request, { params }: { params: Promise<{ id: string }> }) {
   try {
-    if (!isAuthorized(req)) {
-      return unauthorizedResponse();
-    }
+    const denied = restGuard(req);
+    if (denied) return denied;
     const { id } = await params;
     const archived = await archiveProduct(id);
     return NextResponse.json({ success: true, message: 'Product archived successfully', product: archived }, { status: 200 });
